@@ -2,6 +2,8 @@
 
 Your Hasselblad X2D II RAW files from before firmware 1.3.16.1 contain everything needed to know the focus distance, but Lightroom and Capture One can't see it. This tool fixes that, without touching your originals.
 
+In practice, this means: Lightroom and Capture One apply lens corrections (distortion, vignetting, that kind of thing) based on how far away the camera thinks it was focused. Without a focus distance, they assume you were focused far away, which is wrong on close-up shots and makes the correction visibly off. Once a file has been through this tool, the correction is tuned for the actual focus distance, and close-up shots correct properly. The before/after pair below shows the difference.
+
 ## Before and after
 
 ![Lens correction with no focus distance: geometry looks off at close range](docs/images/before.jpg)
@@ -14,8 +16,8 @@ Your Hasselblad X2D II RAW files from before firmware 1.3.16.1 contain everythin
 Yes. Three things make this low-risk:
 
 - **Your original files are never modified.** The tool only reads them.
-- **Corrected files are written as copies**, into a new folder (called `retrofitted` by default, sitting next to your originals).
-- **The whole tool is one readable file**, `hb-focus-retrofit.py`, and the source is open for anyone to check. Nothing is hidden, nothing phones home.
+- **The files with the fix applied, which this guide calls "retrofitted copies," are written as new files**, into a new folder (called `retrofitted` by default, sitting next to your originals). Your originals stay exactly where they were.
+- **The whole tool is one readable file**, `hb-focus-retrofit.py`, and the source is open for anyone to check. If you want to verify for yourself that it never sends anything over the internet, search the file for the words `urllib`, `socket`, and `requests`. You won't find any of them; the tool has no networking code at all.
 
 If you ever want to undo this, just delete the `retrofitted` folder. Your originals were never touched.
 
@@ -25,9 +27,11 @@ If you ever want to undo this, just delete the `retrofitted` folder. Your origin
 - Python 3.9 or later. Most Macs already have this. If yours doesn't, the steps below will tell you exactly what to do.
 - Nothing else. This tool doesn't need any extra libraries or installers beyond Python itself, there's no separate "install" step for the tool.
 
-The rest of this guide is written for a Mac, since that's the most common setup for Hasselblad shooters. Windows notes are called out separately wherever the steps differ.
+The rest of this guide is written for a Mac, since that's the most common setup for Hasselblad shooters. Windows notes are called out separately wherever the steps differ, but there's one substitution that applies everywhere: **on Windows, type `python` wherever this guide shows `python3`.** Also, any path that starts with `~/` (like `~/Desktop`) is Mac shorthand for your home folder; on Windows the equivalent looks like `C:\Users\yourname\Desktop`, or you can just drag the folder into the window as described below and skip typing the path by hand entirely.
 
 ### Checking you have Python (Mac)
+
+Terminal is just a window where you type instructions instead of clicking buttons. Typing the commands in this guide cannot break your Mac, at worst a command does nothing or prints an error you can read and undo.
 
 1. Open **Terminal**. You'll find it in `Applications > Utilities > Terminal`.
 2. Type this and press Return:
@@ -53,7 +57,7 @@ python3 --version
 
 ## Quick start
 
-Five steps: get the code, move into its folder, do a dry run, read the report, then apply for real.
+Five steps: get the code, move into its folder, do a dry run, read the report, then apply for real. Reminder: on Windows, type `python` instead of `python3` in every command below, and use your own folder's real path (a Windows path or the drag-in trick) instead of the Mac-style `~/Desktop/...` examples.
 
 **1. Get the code.**
 
@@ -89,6 +93,8 @@ If either command says something like "no such file or directory," you're not in
 python3 hb-focus-retrofit.py retrofit --source ~/Desktop/X2D-Import
 ```
 
+**Replace `~/Desktop/X2D-Import` with the actual location of YOUR folder.** It's an example, not a real path on your computer. The easiest way to get the real path right: type `python3 hb-focus-retrofit.py retrofit --source ` (with a trailing space, don't press Return yet), then drag your folder from Finder or File Explorer directly into the Terminal/PowerShell window. It will insert the correct path for you. Then press Return.
+
 **4. Read the report.** You'll get one line per file: which ones will get a focus distance written, which ones are skipped and why, and whether the calibration used is a known lens (calibrated) or the raw formula (UNCALIBRATED, see below). It looks something like this:
 
 ```
@@ -107,7 +113,11 @@ Nothing gets written at this stage, this is only a preview so you know what to e
 python3 hb-focus-retrofit.py retrofit --source ~/Desktop/X2D-Import --apply
 ```
 
-Your corrected copies land in `~/Desktop/X2D-Import/retrofitted`. Your originals in `~/Desktop/X2D-Import` are untouched. Re-import the files from the `retrofitted` folder into Lightroom or Capture One and the distance-dependent lens corrections will use the real focus distance instead of guessing "far away."
+Again, `~/Desktop/X2D-Import` is a placeholder, use the same real path (or the same drag-in trick) you used in step 3.
+
+Your retrofitted copies land in a `retrofitted` folder inside the source folder you pointed at (so if your source was `~/Desktop/X2D-Import`, the copies show up in `~/Desktop/X2D-Import/retrofitted`). Your originals are untouched. Re-import the retrofitted copies into Lightroom or Capture One and the distance-dependent lens corrections will use the real focus distance instead of guessing "far away."
+
+**It's safe to run this again.** If you run the same command a second time, files already present in the `retrofitted` folder are skipped rather than overwritten or duplicated. And if a run gets interrupted partway (closing the window, losing power, and so on), you won't end up with a half-written file: the tool verifies each copy right after writing it and deletes it automatically if the verification fails, so anything that survives in the `retrofitted` folder is complete and correct. Your originals are only ever read, never written to, at any point.
 
 ## What "UNCALIBRATED" means
 
@@ -126,6 +136,8 @@ We measured how far off the raw formula is for the Hasselblad XCD 55V lens by sh
 
 Close focus is where the error is worst, which is exactly where distance-dependent lens corrections matter most. That's why this tool ships a calibration for the XCD 55V that corrects for this curve. If your lens has a calibration file, you get the corrected value automatically. If it doesn't yet, you still get the raw formula's number, but the report marks it **UNCALIBRATED** so you know it may be off by the amounts in the table above, not exact.
 
+The table above is specific to the XCD 55V. Other lenses are built differently, so the size of the error, and potentially which direction it leans, will not be identical for other lenses, only the fact that an uncorrected raw formula has some error is a safe general assumption. That's exactly why per-lens calibration exists, see "Calibrating your own lens" below if you'd like to build one for your own lens.
+
 ## Calibrating your own lens
 
 If your lens isn't calibrated yet, you can build a calibration yourself in a few minutes:
@@ -138,7 +150,7 @@ If your lens isn't calibrated yet, you can build a calibration yourself in a few
 python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V-Ladder
 ```
 
-4. The tool prints residuals, meaning how far off the fitted curve is from each of your measured points, as a percentage. Residuals under 2% are good.
+4. The tool prints residuals, meaning how far off the fitted curve is from each of your measured points, as a percentage. Under 2% means your ladder shots were consistent enough to trust; higher than that usually means a step in the ladder was off (wrong distance, wrong lens selected, that kind of thing), and it's worth reshooting.
 5. Share it with the project: open a GitHub issue with the resulting calibration file attached, or open a pull request adding it under `calibration/<lens-name>.json` (for example, a 90V calibration would be `calibration/xcd-90v.json`, following the same naming pattern as the shipped `calibration/xcd-55v.json`). See `CONTRIBUTING.md` for the exact steps.
 
 ## FAQ
@@ -154,6 +166,12 @@ Verified on the Hasselblad X2D II (100C sensor). The tool checks for the presenc
 
 **Does this affect Phocus?**
 No. Phocus calculates its own internal distance handling and doesn't rely on the field this tool writes. Files retrofitted by this tool open in Phocus exactly as before, pixel for pixel.
+
+**Do my Lightroom edits carry over to the retrofitted copies?**
+No. Since the retrofitted copies are new files, Lightroom treats them as new imports with no edit history, they don't automatically inherit any adjustments you made to the originals. If you've already done heavy editing on the originals and don't want to redo it, either copy your Lightroom settings across to the retrofitted copies (Lightroom's "Sync Settings" or "Copy/Paste Settings" work for this), or run this tool before you start editing so you only edit the retrofitted copies from the start.
+
+**What happens if my camera or firmware isn't supported?**
+Files that don't have the data this tool needs are skipped, with the reason printed in the report, they're never guessed at or written to. This is the same behavior whether the reason is old firmware, a different camera body, or anything else the tool doesn't recognize. Nothing bad happens, you just won't get a focus distance for those files.
 
 **Why was my file skipped?**
 The report tells you the specific reason, but here's what each one means:
