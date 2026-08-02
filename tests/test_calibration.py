@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 LADDER = [  # (m, f, camera_m) from calibration/xcd-55v.json
@@ -35,3 +37,52 @@ def test_clamps_beyond_calibrated_range(tool):
     end_ratio = 2.91 / tool.thin_lens_m(55.74468, 0.01803)
     d = cal.correct(0.001, 100.0)
     assert d == pytest.approx(100.0 * end_ratio, rel=1e-6)
+
+
+def test_zero_m_point_is_skipped_not_fatal(tool, tmp_path, caplog):
+    bad = {
+        "lens_model": "Bad Zero M",
+        "points": [
+            {"m": 0, "f": 50.0, "camera_distance_m": 1.0},
+            {"m": 0.05, "f": 51.0, "camera_distance_m": 2.0},
+        ],
+    }
+    (tmp_path / "bad-zero-m.json").write_text(json.dumps(bad))
+    with caplog.at_level("WARNING"):
+        cals = tool.load_calibrations(tmp_path)
+    assert "Bad Zero M" not in cals
+    assert cals == {}
+    assert any("bad-zero-m.json" in r.message for r in caplog.records)
+
+
+def test_non_numeric_m_point_is_skipped_not_fatal(tool, tmp_path, caplog):
+    bad = {
+        "lens_model": "Bad Non Numeric",
+        "points": [
+            {"m": "not-a-number", "f": 50.0, "camera_distance_m": 1.0},
+            {"m": 0.05, "f": 51.0, "camera_distance_m": 2.0},
+        ],
+    }
+    (tmp_path / "bad-non-numeric.json").write_text(json.dumps(bad))
+    with caplog.at_level("WARNING"):
+        cals = tool.load_calibrations(tmp_path)
+    assert "Bad Non Numeric" not in cals
+    assert cals == {}
+    assert any("bad-non-numeric.json" in r.message for r in caplog.records)
+
+
+def test_duplicate_m_points_is_skipped_not_fatal(tool, tmp_path, caplog):
+    bad = {
+        "lens_model": "Bad Duplicate M",
+        "points": [
+            {"m": 0.05, "f": 50.0, "camera_distance_m": 1.0},
+            {"m": 0.05, "f": 51.0, "camera_distance_m": 2.0},
+            {"m": 0.08, "f": 52.0, "camera_distance_m": 3.0},
+        ],
+    }
+    (tmp_path / "bad-duplicate-m.json").write_text(json.dumps(bad))
+    with caplog.at_level("WARNING"):
+        cals = tool.load_calibrations(tmp_path)
+    assert "Bad Duplicate M" not in cals
+    assert cals == {}
+    assert any("bad-duplicate-m.json" in r.message for r in caplog.records)

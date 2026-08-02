@@ -149,8 +149,24 @@ class Calibration:
     @classmethod
     def from_json(cls, path):
         doc = json.loads(pathlib.Path(path).read_text())
-        pts = [(p["m"], p["camera_distance_m"] / thin_lens_m(p["f"], p["m"]))
-               for p in doc["points"]]
+        pts = []
+        for p in doc["points"]:
+            m, f, camera = p["m"], p["f"], p["camera_distance_m"]
+            if isinstance(m, bool) or not isinstance(m, (int, float)):
+                raise ValueError(f"point m must be numeric, got {m!r}")
+            if isinstance(f, bool) or not isinstance(f, (int, float)):
+                raise ValueError(f"point f must be numeric, got {f!r}")
+            if isinstance(camera, bool) or not isinstance(camera, (int, float)):
+                raise ValueError(f"point camera_distance_m must be numeric, got {camera!r}")
+            if m <= 0:
+                raise ValueError(f"point m must be > 0, got {m!r}")
+            if camera <= 0:
+                raise ValueError(f"point camera_distance_m must be > 0, got {camera!r}")
+            pts.append((m, camera / thin_lens_m(f, m)))
+        pts.sort()
+        for (m0, _), (m1, _) in zip(pts, pts[1:]):
+            if m0 == m1:
+                raise ValueError(f"duplicate m value {m0!r} in calibration points")
         return cls(doc["lens_model"], pts)
 
     def ratio(self, m):
@@ -177,7 +193,7 @@ def load_calibrations(dir_path):
             try:
                 cal = Calibration.from_json(p)
                 out[cal.lens_model] = cal
-            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            except (KeyError, ValueError, TypeError, ZeroDivisionError, json.JSONDecodeError) as exc:
                 logger.warning("ignoring bad calibration file %s: %s", p, exc)
     return out
 
