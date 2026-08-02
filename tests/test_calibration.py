@@ -71,6 +71,32 @@ def test_non_numeric_m_point_is_skipped_not_fatal(tool, tmp_path, caplog):
     assert any("bad-non-numeric.json" in r.message for r in caplog.records)
 
 
+def test_empty_points_is_skipped_not_fatal(tool, tmp_path, caplog):
+    bad = {"lens_model": "Bad Empty Points", "points": []}
+    (tmp_path / "bad-empty-points.json").write_text(json.dumps(bad))
+    with caplog.at_level("WARNING"):
+        cals = tool.load_calibrations(tmp_path)
+    assert "Bad Empty Points" not in cals
+    assert cals == {}
+    assert any("bad-empty-points.json" in r.message for r in caplog.records)
+
+
+def test_nonpositive_f_point_is_skipped_not_fatal(tool, tmp_path, caplog):
+    bad = {
+        "lens_model": "Bad Negative F",
+        "points": [
+            {"m": 0.05, "f": -50.0, "camera_distance_m": 1.0},
+            {"m": 0.08, "f": 51.0, "camera_distance_m": 2.0},
+        ],
+    }
+    (tmp_path / "bad-negative-f.json").write_text(json.dumps(bad))
+    with caplog.at_level("WARNING"):
+        cals = tool.load_calibrations(tmp_path)
+    assert "Bad Negative F" not in cals
+    assert cals == {}
+    assert any("bad-negative-f.json" in r.message for r in caplog.records)
+
+
 def test_duplicate_m_points_is_skipped_not_fatal(tool, tmp_path, caplog):
     bad = {
         "lens_model": "Bad Duplicate M",

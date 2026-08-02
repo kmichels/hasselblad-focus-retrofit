@@ -54,6 +54,28 @@ def test_refuses_double_write(tool, tmp_path):
         tool.write_subject_distance(copy, info, 1.0)
 
 
+def test_rejects_overflowing_distance(tool, tmp_path):
+    # A pathological calibration ratio can produce a distance whose
+    # round(dist_m * 1000) numerator would not fit a uint32 RATIONAL.
+    src = build_3fr(tmp_path / "orig.3FR")
+    copy = tmp_path / "copy.3FR"
+    shutil.copy2(src, copy)
+    info = tool.parse_file(copy)
+    with pytest.raises(tool.ParseError):
+        tool.write_subject_distance(copy, info, 4294968.0)  # *1000 > uint32 max
+
+
+def test_rejects_nonpositive_distance(tool, tmp_path):
+    src = build_3fr(tmp_path / "orig.3FR")
+    copy = tmp_path / "copy.3FR"
+    shutil.copy2(src, copy)
+    info = tool.parse_file(copy)
+    with pytest.raises(tool.ParseError):
+        tool.write_subject_distance(copy, info, -1.0)
+    with pytest.raises(tool.ParseError):
+        tool.write_subject_distance(copy, info, 0.0)
+
+
 def test_big_endian_write(tool, tmp_path):
     src = build_3fr(tmp_path / "orig.3FR", byte_order="MM")
     copy = tmp_path / "copy.3FR"
