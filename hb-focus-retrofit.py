@@ -32,6 +32,7 @@ class FileInfo:
     maker_f: Optional[float]
     maker_m: Optional[float]
     subject_distance: Optional[float]
+    focal_length: Optional[float]
     exif_ptr_pos: int
     exif_ifd_off: int
     exif_entries: List[bytes]
@@ -130,6 +131,7 @@ def parse_file(path):
             lens_model=value(exif[0xA434]) if 0xA434 in exif else None,
             maker_f=maker_f, maker_m=maker_m,
             subject_distance=value(exif[0x9206]) if 0x9206 in exif else None,
+            focal_length=value(exif[0x920A]) if 0x920A in exif else None,
             exif_ptr_pos=exif_ptr_pos, exif_ifd_off=exif_off,
             exif_entries=exif_entries, exif_next_ifd=exif_next,
         )
@@ -137,6 +139,24 @@ def parse_file(path):
 
 def thin_lens_m(f_mm, m):
     return f_mm * (1 + 1 / m) / 1000.0
+
+
+def classify(info):
+    if info.subject_distance is not None:
+        return "skip-present", f"SubjectDistance already {info.subject_distance:g} m"
+    if info.maker_f is None or info.maker_m is None:
+        return "skip-nofields", "no maker-note focus fields (firmware before 1.2.7.11?)"
+    if info.maker_m <= 0:
+        return "skip-infinity", "magnification 0 = focused at infinity"
+    if info.maker_m > 2:
+        return "skip-insane", f"magnification {info.maker_m:g} out of range"
+    if thin_lens_m(info.maker_f, info.maker_m) > 1000:
+        # also guards the uint32 RATIONAL numerator (d*1000) against overflow
+        return "skip-infinity", "computed distance beyond 1 km = effectively infinity"
+    if info.focal_length and not (0.3 * info.focal_length <= info.maker_f <= 3.0 * info.focal_length):
+        return "skip-insane", (f"maker focal {info.maker_f:g} mm implausible vs "
+                               f"nominal {info.focal_length:g} mm")
+    return "write", ""
 
 
 class Calibration:
