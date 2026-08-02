@@ -148,6 +148,16 @@ Close focus is where the error is worst, which is exactly where distance-depende
 
 The table above is specific to the XCD 55V. Other lenses are built differently, so the size of the error, and even which direction it leans, is not the same from lens to lens. On the XCD 55V the formula reads low at close focus (about -15%). A single measured frame with the XCD 90V read high instead, +9% at 0.5 m, the opposite direction. That's one data point on one lens, not a full calibration curve, but it's enough to show the error isn't a fixed offset you can just mentally correct for. That's exactly why per-lens calibration exists, see "Calibrating your own lens" below if you'd like to build one for your own lens.
 
+## Warning: teleconverters and extension tubes fool this tool
+
+If you shoot a lens through the X Converter 1.7, or any teleconverter or extension tube, do not retrofit those frames. This is a warning about a wrong result, not a missing one.
+
+The camera writes the same lens name to the file whether the converter is attached or not. The shipped `calibration/xcd-135.json` was measured on the bare XCD 135 only. A frame shot with the XCD 135 plus the X Converter 1.7 reports the same "XCD 135" lens name, but the effective focal length is roughly 203 to 221 mm instead of the bare lens's 127 to 132 mm. Nothing in the file tells the tool which one it's looking at, so it applies the bare-lens calibration to the converter frame anyway and writes a distance that is wrong, not skipped. Lightroom and Capture One will then apply distance-dependent lens corrections using that wrong number.
+
+If you shoot the 135 with the 1.7x converter, keep those frames out of the source folder, or delete the retrofitted copies for them afterward. The same caution applies to any lens used with a converter or extension tube where a calibration exists for the bare lens: the tool cannot tell the two apart and will pick the wrong curve.
+
+Separately, converter frames also make poor material for building your own calibration ladder in the first place. With the converter attached, the camera's own reported focus distance stops tracking somewhere between roughly 1.7 and 3 metres. Five consecutive test frames all reported 1.66 m while the lens was demonstrably focusing further out. If you're building a calibration for a converter setup, expect that range to be unreliable and check your residuals carefully.
+
 ## Calibrating your own lens
 
 If your lens isn't calibrated yet, you can build a calibration yourself in a few minutes:

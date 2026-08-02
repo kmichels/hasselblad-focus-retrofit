@@ -5,7 +5,7 @@
 The most useful contribution is a calibration for a lens that isn't covered yet.
 
 1. Update your camera's firmware to 1.3.16.1 or later. That firmware reports its own focus distance, which the calibration process fits against.
-2. Shoot a ladder: minimum focus distance, then roughly every half metre out to about 3 metres, 6-8 frames, any subject, tripod optional, sharpness doesn't matter.
+2. Shoot a ladder: minimum focus distance, then roughly every half metre out to about 3 metres, 6-8 frames, any subject, tripod optional, sharpness doesn't matter. Never mix bare-lens and converter or extension-tube frames in the same ladder folder: `derive_calibration` groups frames only by the lens name in the file, so a bare lens and that same lens with a converter attached (which report the same name but have different effective focal lengths) will get silently fit into one bad curve instead of two correct ones. Shoot and submit them as separate lens folders.
 3. Put those frames in their own folder (one lens per folder) and run:
 
 ```
