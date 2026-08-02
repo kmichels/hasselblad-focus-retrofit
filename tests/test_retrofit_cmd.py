@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from fixtures import build_3fr
 
@@ -12,7 +14,7 @@ def make_folder(tmp_path):
     build_3fr(src / "far.3FR", lens_model="XCD 38V", maker_f=89.48658, maker_m=0.00112)        # ~80 m
     build_3fr(src / "inf.3FR", maker_m=0.0)
     build_3fr(src / "tagged.3FR", subject_distance=(500, 1000))
-    (src / "close.phos").write_text("<plist/>")
+    (src / "close.3FR.phos").write_text("<plist/>")
     return src
 
 
@@ -52,8 +54,94 @@ def test_apply_is_idempotent(tool, tmp_path, capsys):
 def test_copy_sidecars_flag(tool, tmp_path):
     src = make_folder(tmp_path)
     tool.main(["retrofit", "--source", str(src), "--apply", "--copy-sidecars"])
-    assert (src / "retrofitted" / "close.phos").exists()
+    assert (src / "retrofitted" / "close.3FR.phos").exists()
+    assert not (src / "retrofitted" / "far.3FR.phos").exists()
+
+
+def test_bare_stem_sidecar_name_is_not_matched(tool, tmp_path):
+    # Real Phocus sidecars are named "<full filename>.phos" (e.g. B0031108.3FR.phos),
+    # not "<stem>.phos". A bare-stem file must never be picked up as a sidecar.
+    src = make_folder(tmp_path)
+    (src / "far.phos").write_text("<plist/>")
+    tool.main(["retrofit", "--source", str(src), "--apply", "--copy-sidecars"])
     assert not (src / "retrofitted" / "far.phos").exists()
+    assert not (src / "retrofitted" / "far.3FR.phos").exists()
+
+
+def test_sidecar_copy_failure_warns_but_does_not_fail_the_file(tool, tmp_path, capsys):
+    src = make_folder(tmp_path)
+    sidecar = src / "close.3FR.phos"
+    os.chmod(sidecar, 0o000)
+    if os.access(sidecar, os.R_OK):
+        pytest.skip("running as a user that bypasses file permission bits (e.g. root)")
+    try:
+        rc = tool.main(["retrofit", "--source", str(src), "--apply", "--copy-sidecars"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert (src / "retrofitted" / "close.3FR").exists()
+        assert not (src / "retrofitted" / "close.3FR.phos").exists()
+        assert "close.3FR" in out and "warning" in out.lower()
+        assert "written=" in out and "failures=" not in out
+    finally:
+        os.chmod(sidecar, 0o644)
+
+
+def test_unreadable_file_is_reported_not_crashed(tool, tmp_path, capsys):
+    src = make_folder(tmp_path)
+    unreadable = src / "unreadable.3FR"
+    build_3fr(unreadable)
+    os.chmod(unreadable, 0o000)
+    if os.access(unreadable, os.R_OK):
+        pytest.skip("running as a user that bypasses file permission bits (e.g. root)")
+    try:
+        rc = tool.main(["retrofit", "--source", str(src)])
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "unreadable.3FR" in out
+        assert "FAILED" in out
+        assert "close.3FR" in out  # the rest of the folder is still processed
+    finally:
+        os.chmod(unreadable, 0o644)
+
+
+def test_missing_calibration_file_reports_error(tool, tmp_path, capsys):
+    src = make_folder(tmp_path)
+    missing = tmp_path / "does-not-exist.json"
+    rc = tool.main(["retrofit", "--source", str(src), "--calibration", str(missing)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "error:" in err.lower()
+
+
+def test_malformed_calibration_file_reports_error(tool, tmp_path, capsys):
+    src = make_folder(tmp_path)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not valid json")
+    rc = tool.main(["retrofit", "--source", str(src), "--calibration", str(bad)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "error:" in err.lower()
+
+
+def test_no_files_in_parent_hints_at_subfolder(tool, tmp_path, capsys):
+    parent = tmp_path / "SD Card"
+    sub = parent / "DCIM"
+    sub.mkdir(parents=True)
+    build_3fr(sub / "B0031108.3FR")
+    rc = tool.main(["retrofit", "--source", str(parent)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DCIM" in out
+    assert "--source" in out
+
+
+def test_no_files_anywhere_gives_plain_message(tool, tmp_path, capsys):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    rc = tool.main(["retrofit", "--source", str(empty)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "no 3FR files found" in out
 
 
 def test_custom_dest(tool, tmp_path):

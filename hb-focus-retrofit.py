@@ -146,6 +146,13 @@ def write_subject_distance(path, info, dist_m):
     tags = [struct.unpack(e + "H", x[:2])[0] for x in info.exif_entries]
     if 0x9206 in tags:
         raise ParseError(f"{info.path.name}: SubjectDistance already present")
+    if not (dist_m > 0) or round(dist_m * 1000) > 4294967295:
+        # Guards the uint32 RATIONAL numerator against overflow and rejects
+        # non-positive distances outright; classify()'s >1km check is only
+        # an early skip on the pre-calibration estimate, not a hard bound on
+        # what a calibration curve can ultimately produce here.
+        raise ParseError(f"{info.path.name}: distance {dist_m!r} m is out of "
+                          f"range for a SubjectDistance RATIONAL")
     num, den = round(dist_m * 1000), 1000
     with open(path, "r+b") as fh:
         fh.seek(0, 2)
@@ -196,6 +203,8 @@ class Calibration:
     @classmethod
     def from_json(cls, path):
         doc = json.loads(pathlib.Path(path).read_text())
+        if not doc["points"]:
+            raise ValueError("calibration has no points")
         pts = []
         for p in doc["points"]:
             m, f, camera = p["m"], p["f"], p["camera_distance_m"]
@@ -207,6 +216,8 @@ class Calibration:
                 raise ValueError(f"point camera_distance_m must be numeric, got {camera!r}")
             if m <= 0:
                 raise ValueError(f"point m must be > 0, got {m!r}")
+            if f <= 0:
+                raise ValueError(f"point f must be > 0, got {f!r}")
             if camera <= 0:
                 raise ValueError(f"point camera_distance_m must be > 0, got {camera!r}")
             pts.append((m, camera / thin_lens_m(f, m)))
@@ -253,7 +264,11 @@ def cmd_retrofit(args):
     dest = pathlib.Path(args.dest).expanduser().resolve() if args.dest else source / "retrofitted"
 
     if args.calibration:
-        cal = Calibration.from_json(args.calibration)
+        try:
+            cal = Calibration.from_json(args.calibration)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         cals = {cal.lens_model: cal}
     else:
         cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
@@ -262,7 +277,14 @@ def cmd_retrofit(args):
                    if p.is_file() and p.suffix.lower() == ".3fr"
                    and p.parent != dest)
     if not files:
-        print(f"no 3FR files found in {source}")
+        example = _find_3fr_in_subfolder(source)
+        if example:
+            print(f"no 3FR files found directly in {source}, but "
+                  f"{example.parent.name}/ has some (e.g. {example.name}). "
+                  f"This tool does not scan subfolders: point --source at "
+                  f"{example.parent} instead.")
+        else:
+            print(f"no 3FR files found in {source}")
         return 0
 
     counts, failures = {}, 0
@@ -271,7 +293,7 @@ def cmd_retrofit(args):
         try:
             info = parse_file(p)
             action, detail = classify(info)
-        except ParseError as exc:
+        except (ParseError, OSError) as exc:
             rows.append((p.name, f"FAILED: {exc}"))
             failures += 1
             continue
@@ -290,8 +312,11 @@ def cmd_retrofit(args):
             counts["would-write"] = counts.get("would-write", 0) + 1
             continue
         try:
-            _apply_one(p, info, d, dest, phos if args.copy_sidecars else None)
-            rows.append((p.name, f"wrote {d:.3f} m  {label}{sidetxt}"))
+            sidecar_warning = _apply_one(p, info, d, dest, phos if args.copy_sidecars else None)
+            msg = f"wrote {d:.3f} m  {label}{sidetxt}"
+            if sidecar_warning:
+                msg += f"  (warning: {sidecar_warning})"
+            rows.append((p.name, msg))
             counts["written"] = counts.get("written", 0) + 1
         except SkipExisting:
             rows.append((p.name, "skip: already in destination"))
@@ -309,13 +334,29 @@ def cmd_retrofit(args):
     return 1 if failures else 0
 
 
+def _find_3fr_in_subfolder(source):
+    """Non-recursive scan stays non-recursive; this only looks one level
+    down to name a helpful example when the top-level folder is empty."""
+    for d in sorted(p for p in source.iterdir() if p.is_dir()):
+        try:
+            hit = next((f for f in d.iterdir()
+                        if f.is_file() and f.suffix.lower() == ".3fr"), None)
+        except OSError:
+            continue
+        if hit:
+            return hit
+    return None
+
+
 class SkipExisting(Exception):
     pass
 
 
 def _find_sidecar(p):
+    # Real Phocus sidecars are named "<full filename>.phos", e.g.
+    # B0031108.3FR.phos, not the with_suffix() replacement "B0031108.phos".
     for ext in (".phos", ".PHOS"):
-        cand = p.with_suffix(ext)
+        cand = p.with_name(p.name + ext)
         if cand.exists():
             return cand
     return None
@@ -342,7 +383,14 @@ def _apply_one(p, info, dist_m, dest, sidecar):
         target.unlink(missing_ok=True)
         raise
     if sidecar:
-        shutil.copy2(sidecar, dest / sidecar.name)
+        try:
+            shutil.copy2(sidecar, dest / sidecar.name)
+        except OSError as exc:
+            # The retrofit itself already succeeded and was verified above;
+            # a sidecar copy failure is a lesser problem and must not mark
+            # the file as failed or discard the good copy.
+            return f"could not copy sidecar {sidecar.name}: {exc}"
+    return None
 
 
 class CalibrationError(Exception):
