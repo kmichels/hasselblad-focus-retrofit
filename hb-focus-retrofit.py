@@ -6,6 +6,7 @@ Project: https://github.com/kmichels/hasselblad-focus-retrofit  (MIT)
 """
 import argparse
 import dataclasses
+import datetime
 import json
 import logging
 import os
@@ -344,8 +345,85 @@ def _apply_one(p, info, dist_m, dest, sidecar):
         shutil.copy2(sidecar, dest / sidecar.name)
 
 
+class CalibrationError(Exception):
+    pass
+
+
+def derive_calibration(folder):
+    folder = pathlib.Path(folder)
+    frames = []
+    for p in sorted(folder.iterdir()):
+        if p.suffix.lower() != ".3fr":
+            continue
+        try:
+            info = parse_file(p)
+        except ParseError:
+            continue
+        sd = info.subject_distance
+        if (info.maker_f and info.maker_m and info.maker_m > 0
+                and sd is not None and 0 < sd < 50):
+            frames.append(info)
+    if len(frames) < 5:
+        raise CalibrationError(
+            f"only {len(frames)} usable frames in {folder} (need at least 5: "
+            "new-firmware shots with real focus distances)")
+    lens = frames[0].lens_model or "unknown-lens"
+    others = sorted({f.lens_model for f in frames} - {frames[0].lens_model})
+    frames = [f for f in frames if f.lens_model == frames[0].lens_model]
+    warnings = []
+    if others:
+        warnings.append(
+            f"folder also contains frames from {', '.join(str(o) for o in others)}; "
+            f"only {lens} was calibrated. Run calibrate once per lens folder.")
+    points = sorted(
+        ({"m": f.maker_m, "f": f.maker_f, "camera_distance_m": f.subject_distance}
+         for f in frames), key=lambda p: p["m"])
+    dists = [p["camera_distance_m"] for p in points]
+    if min(dists) > 0.7:
+        warnings.append("ladder does not reach below 0.7 m; near-field correction will be extrapolation-clamped")
+    if max(dists) / min(dists) < 3:
+        warnings.append("ladder spans less than 3x in distance; curve may be unreliable")
+    doc = {"lens_model": lens, "points": points,
+           "provenance": {"body": frames[0].model, "firmware": frames[0].software,
+                          "frames": len(points), "contributor": "", "date": ""}}
+    return doc, warnings
+
+
+def _loo_residuals(doc):
+    pts = doc["points"]
+    out = []
+    for i, p in enumerate(pts):
+        rest = pts[:i] + pts[i + 1:]
+        cal = Calibration(doc["lens_model"],
+                          [(q["m"], q["camera_distance_m"] / thin_lens_m(q["f"], q["m"]))
+                           for q in rest])
+        pred = cal.correct(p["m"], thin_lens_m(p["f"], p["m"]))
+        out.append((p["camera_distance_m"], abs(pred - p["camera_distance_m"]) / p["camera_distance_m"]))
+    return out
+
+
 def cmd_calibrate(args):
-    raise NotImplementedError
+    try:
+        doc, warnings = derive_calibration(pathlib.Path(args.source).expanduser())
+    except (CalibrationError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    doc["provenance"]["date"] = datetime.date.today().isoformat()
+    out = pathlib.Path(args.out) if args.out else pathlib.Path(
+        doc["lens_model"].lower().replace(" ", "-").replace("/", "-") + ".json")
+    out.write_text(json.dumps(doc, indent=2) + "\n")
+    print(f"wrote {out} ({doc['provenance']['frames']} points, lens {doc['lens_model']})")
+    for w in warnings:
+        print(f"warning: {w}")
+    print("\nleave-one-out residuals (each point predicted by the others):")
+    bad = False
+    for dist, res in _loo_residuals(doc):
+        flag = "  <-- above 2%, check this frame" if res > 0.02 else ""
+        print(f"  {dist:6.2f} m: {100 * res:5.2f}%{flag}")
+        bad = bad or res > 0.02
+    if bad:
+        print("some residuals above 2%: consider reshooting those rungs before submitting")
+    return 0
 
 
 def cmd_inspect(args):
@@ -370,7 +448,7 @@ def build_parser():
     r.set_defaults(func=cmd_retrofit)
 
     c = sub.add_parser("calibrate", help="derive a lens calibration from new-firmware ladder shots")
-    c.add_argument("--source", required=True, help="folder with ladder shots")
+    c.add_argument("--source", required=True, help="folder with ladder shots (one lens per folder)")
     c.add_argument("--out", default=None, help="output JSON path (default: <lens>.json in current folder)")
     c.set_defaults(func=cmd_calibrate)
 
