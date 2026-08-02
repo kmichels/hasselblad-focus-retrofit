@@ -14,10 +14,15 @@ python3 hb-focus-retrofit.py inspect B0001234.3FR
 
 ## Before and after
 
-![Lens correction with no focus distance: geometry looks off at close range](docs/images/before.jpg)
-![Lens correction with focus distance restored: geometry corrected](docs/images/after.jpg)
+**Before**, the file as your archive has it today. Lightroom has no focus distance to work from, so it corrects the lens as though you focused far away:
 
-*(Images are on the way. The screenshots above are placeholders until real exported JPEGs are added to `docs/images/`.)*
+![Lightroom rendering of a close-focus frame with no focus distance recorded, corrected as if focused at infinity](docs/images/before.jpg)
+
+**After**, the same RAW frame with the focus distance filled in by this tool:
+
+![The same frame after retrofitting, with Lightroom applying the correction for the real focus distance](docs/images/after.jpg)
+
+Both images come from one frame: a Hasselblad X2D II with the XCD 55V, focused at about 0.64 metres, shot on firmware 1.2.7.16 (before the camera recorded focus distance itself). Nothing was changed in Lightroom between the two, and the RAW image data is byte for byte identical. The only difference is the focus distance the file carries.
 
 ## Is this safe?
 
