@@ -6,10 +6,14 @@ Project: https://github.com/kmichels/hasselblad-focus-retrofit  (MIT)
 """
 import argparse
 import dataclasses
+import json
+import logging
 import pathlib
 import struct
 import sys
 from typing import List, Optional
+
+logger = logging.getLogger("hb-focus-retrofit")
 
 VERSION = "0.1.0"
 
@@ -129,6 +133,53 @@ def parse_file(path):
             exif_ptr_pos=exif_ptr_pos, exif_ifd_off=exif_off,
             exif_entries=exif_entries, exif_next_ifd=exif_next,
         )
+
+
+def thin_lens_m(f_mm, m):
+    return f_mm * (1 + 1 / m) / 1000.0
+
+
+class Calibration:
+    def __init__(self, lens_model, points):
+        # points: list of (m, ratio) sorted by m ascending;
+        # ratio = camera_distance / thin_lens_m(f, m) at that knot
+        self.lens_model = lens_model
+        self.points = sorted(points)
+
+    @classmethod
+    def from_json(cls, path):
+        doc = json.loads(pathlib.Path(path).read_text())
+        pts = [(p["m"], p["camera_distance_m"] / thin_lens_m(p["f"], p["m"]))
+               for p in doc["points"]]
+        return cls(doc["lens_model"], pts)
+
+    def ratio(self, m):
+        pts = self.points
+        if m <= pts[0][0]:
+            return pts[0][1]
+        if m >= pts[-1][0]:
+            return pts[-1][1]
+        for (m0, r0), (m1, r1) in zip(pts, pts[1:]):
+            if m0 <= m <= m1:
+                t = (m - m0) / (m1 - m0)
+                return r0 + t * (r1 - r0)
+        return pts[-1][1]
+
+    def correct(self, m, d_est):
+        return d_est * self.ratio(m)
+
+
+def load_calibrations(dir_path):
+    out = {}
+    d = pathlib.Path(dir_path)
+    if d.is_dir():
+        for p in sorted(d.glob("*.json")):
+            try:
+                cal = Calibration.from_json(p)
+                out[cal.lens_model] = cal
+            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("ignoring bad calibration file %s: %s", p, exc)
+    return out
 
 
 def cmd_retrofit(args):
