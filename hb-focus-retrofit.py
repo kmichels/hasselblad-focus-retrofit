@@ -137,6 +137,29 @@ def parse_file(path):
         )
 
 
+def write_subject_distance(path, info, dist_m):
+    e = "<" if info.byte_order == "II" else ">"
+    tags = [struct.unpack(e + "H", x[:2])[0] for x in info.exif_entries]
+    if 0x9206 in tags:
+        raise ParseError(f"{info.path.name}: SubjectDistance already present")
+    num, den = round(dist_m * 1000), 1000
+    with open(path, "r+b") as fh:
+        fh.seek(0, 2)
+        new_off = fh.tell()
+        if new_off % 2:
+            fh.write(b"\x00")
+            new_off += 1
+        n = len(info.exif_entries) + 1
+        val_off = new_off + 2 + 12 * n + 4
+        entry = struct.pack(e + "HHII", 0x9206, 5, 1, val_off)
+        merged = sorted(info.exif_entries + [entry],
+                        key=lambda x: struct.unpack(e + "H", x[:2])[0])
+        fh.write(struct.pack(e + "H", n) + b"".join(merged)
+                 + info.exif_next_ifd + struct.pack(e + "II", num, den))
+        fh.seek(info.exif_ptr_pos)
+        fh.write(struct.pack(e + "I", new_off))
+
+
 def thin_lens_m(f_mm, m):
     return f_mm * (1 + 1 / m) / 1000.0
 
