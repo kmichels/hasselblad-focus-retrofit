@@ -153,7 +153,7 @@ def classify(info):
     if thin_lens_m(info.maker_f, info.maker_m) > 1000:
         # also guards the uint32 RATIONAL numerator (d*1000) against overflow
         return "skip-infinity", "computed distance beyond 1 km = effectively infinity"
-    if info.focal_length and not (0.3 * info.focal_length <= info.maker_f <= 3.0 * info.focal_length):
+    if info.focal_length is not None and not (0.3 * info.focal_length <= info.maker_f <= 3.0 * info.focal_length):
         return "skip-insane", (f"maker focal {info.maker_f:g} mm implausible vs "
                                f"nominal {info.focal_length:g} mm")
     return "write", ""

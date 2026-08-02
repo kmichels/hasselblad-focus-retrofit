@@ -47,3 +47,12 @@ def test_skip_effectively_infinite_distance(tool, tmp_path):
     # RATIONAL numerator (review finding). Must be treated as infinity.
     action, _ = tool.classify(_info(tool, tmp_path, maker_m=1e-9))
     assert action == "skip-infinity"
+
+
+def test_skip_insane_focal_zero_nominal(tool, tmp_path):
+    # focal_length is 0.0 (RATIONAL 0/1, not None): range [0.0, 0.0]
+    # rejects any positive maker_f as skip-insane (garbage metadata).
+    # Tests that is not None guard, not truthiness, gates the check.
+    action, detail = tool.classify(_info(tool, tmp_path, focal_length=(0, 1)))
+    assert action == "skip-insane"
+    assert "implausible" in detail
