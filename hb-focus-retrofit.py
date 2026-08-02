@@ -406,6 +406,30 @@ def _loo_residuals(doc):
     return out
 
 
+def _slugify_lens(lens_model):
+    """Turn an untrusted EXIF lens name into a safe bare filename stem.
+
+    Lowercases, keeps only [a-z0-9._-], maps everything else to "-",
+    collapses runs of "-", strips leading/trailing "-"/".", and finally
+    takes just the last path component so no separator or ".." can survive.
+    """
+    slug = lens_model.lower()
+    slug = "".join(c if c in "abcdefghijklmnopqrstuvwxyz0123456789._-" else "-" for c in slug)
+    # Collapse any run of "-"/"." (which includes ".." traversal sequences)
+    # down to a single "-" so no separator-like run can survive.
+    collapsed = []
+    prev_was_sep = False
+    for c in slug:
+        is_sep = c in "-."
+        if is_sep and prev_was_sep:
+            continue
+        collapsed.append("-" if is_sep else c)
+        prev_was_sep = is_sep
+    slug = "".join(collapsed).strip("-.")
+    slug = pathlib.PurePath(slug).name
+    return slug or "unknown-lens"
+
+
 def cmd_calibrate(args):
     try:
         doc, warnings = derive_calibration(pathlib.Path(args.source).expanduser())
@@ -413,8 +437,14 @@ def cmd_calibrate(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
     doc["provenance"]["date"] = datetime.date.today().isoformat()
-    out = pathlib.Path(args.out) if args.out else pathlib.Path(
-        doc["lens_model"].lower().replace(" ", "-").replace("/", "-") + ".json")
+    if args.out:
+        out = pathlib.Path(args.out)
+    else:
+        out = pathlib.Path(_slugify_lens(doc["lens_model"]) + ".json")
+        if out.exists():
+            print(f"error: {out} already exists; pass --out to choose a "
+                  f"different path", file=sys.stderr)
+            return 1
     out.write_text(json.dumps(doc, indent=2) + "\n")
     print(f"wrote {out} ({doc['provenance']['frames']} points, lens {doc['lens_model']})")
     for w in warnings:

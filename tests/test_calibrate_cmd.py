@@ -83,3 +83,34 @@ def test_cli_writes_json(tool, tmp_path, capsys, monkeypatch):
     doc = json.loads((tmp_path / "xcd-55v.json").read_text())
     assert doc["provenance"]["frames"] == 9
     assert "residual" in capsys.readouterr().out.lower()
+
+
+def test_cli_sanitizes_traversal_lens_name(tool, tmp_path, monkeypatch):
+    src = tmp_path / "ladder"
+    src.mkdir()
+    evil_lens = "..\\..\\XCD 55V/../evil"
+    for i, (m, f, dist) in enumerate(LADDER):
+        build_3fr(src / f"L{i:02d}.3FR", software="1.3.16.1", maker_f=f, maker_m=m,
+                  subject_distance=(int(dist * 1000), 1000), lens_model=evil_lens)
+    monkeypatch.chdir(tmp_path)
+    rc = tool.main(["calibrate", "--source", str(src)])
+    assert rc == 0
+
+    written = [p for p in tmp_path.iterdir() if p.is_file() and p.suffix == ".json"]
+    assert len(written) == 1
+    out_path = written[0]
+    assert "\\" not in out_path.name
+    assert "/" not in out_path.name
+    assert ".." not in out_path.name
+    # nothing was written outside tmp_path
+    assert out_path.parent == tmp_path
+
+
+def test_cli_refuses_to_overwrite_default_output(tool, tmp_path, monkeypatch):
+    src = make_ladder(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "xcd-55v.json"
+    target.write_text("PRE-EXISTING CONTENT\n")
+    rc = tool.main(["calibrate", "--source", str(src)])
+    assert rc == 1
+    assert target.read_text() == "PRE-EXISTING CONTENT\n"
