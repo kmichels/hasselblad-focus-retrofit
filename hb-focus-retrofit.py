@@ -431,7 +431,33 @@ def cmd_calibrate(args):
 
 
 def cmd_inspect(args):
-    raise NotImplementedError
+    cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
+    failures = 0
+    for name in args.files:
+        p = pathlib.Path(name)
+        print(f"== {p.name}")
+        try:
+            info = parse_file(p)
+        except (ParseError, OSError) as exc:
+            print(f"  unreadable: {exc}")
+            failures += 1
+            continue
+        action, detail = classify(info)
+        print(f"  camera:    {info.model}   firmware: {info.software}")
+        print(f"  lens:      {info.lens_model}   nominal focal: {info.focal_length}")
+        print(f"  maker note: f={info.maker_f}  m={info.maker_m}")
+        print(f"  SubjectDistance in file: "
+              f"{'none' if info.subject_distance is None else f'{info.subject_distance:g} m'}")
+        if info.maker_f and info.maker_m and info.maker_m > 0:
+            d_est = thin_lens_m(info.maker_f, info.maker_m)
+            cal = cals.get(info.lens_model or "")
+            print(f"  thin-lens estimate: {d_est:.2f} m")
+            if cal:
+                print(f"  calibrated ({cal.lens_model}): {cal.correct(info.maker_m, d_est):.2f} m")
+            else:
+                print("  calibrated: UNCALIBRATED (no data for this lens)")
+        print(f"  verdict: {action}" + (f" ({detail})" if detail else ""))
+    return 1 if failures else 0
 
 
 def build_parser():
