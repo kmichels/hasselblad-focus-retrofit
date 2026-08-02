@@ -370,6 +370,10 @@ def derive_calibration(folder):
     lens = frames[0].lens_model or "unknown-lens"
     others = sorted({f.lens_model for f in frames} - {frames[0].lens_model})
     frames = [f for f in frames if f.lens_model == frames[0].lens_model]
+    if len(frames) < 5:
+        raise CalibrationError(
+            f"only {len(frames)} usable frames for {lens} in {folder} (need at least 5: "
+            "new-firmware shots with real focus distances)")
     warnings = []
     if others:
         warnings.append(

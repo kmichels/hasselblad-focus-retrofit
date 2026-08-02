@@ -52,6 +52,23 @@ def test_too_few_frames_raises(tool, tmp_path):
         tool.derive_calibration(src)
 
 
+def test_too_few_frames_for_first_lens_raises(tool, tmp_path):
+    # First-sorted lens (by filename) has only 3 usable frames; a second lens
+    # later in sort order has 5. Total usable frames across both is 8 (>= 5),
+    # but the per-lens count for the lens actually being calibrated is 3 and
+    # must still raise, not silently build a 3-point calibration.
+    src = tmp_path / "ladder"
+    src.mkdir()
+    for i, (m, f, dist) in enumerate(LADDER[:3]):
+        build_3fr(src / f"A{i:02d}.3FR", software="1.3.16.1", lens_model="XCD 38V",
+                  maker_f=f, maker_m=m, subject_distance=(int(dist * 1000), 1000))
+    for i, (m, f, dist) in enumerate(LADDER[3:8]):
+        build_3fr(src / f"Z{i:02d}.3FR", software="1.3.16.1", lens_model="XCD 90V",
+                  maker_f=f, maker_m=m, subject_distance=(int(dist * 1000), 1000))
+    with pytest.raises(tool.CalibrationError):
+        tool.derive_calibration(src)
+
+
 def test_warns_on_short_ladder(tool, tmp_path):
     # only the far half: min distance 1.10 m (> 0.7), span 2.91/1.10 < 3x
     doc, warnings = tool.derive_calibration(make_ladder(tmp_path, LADDER[4:]))
