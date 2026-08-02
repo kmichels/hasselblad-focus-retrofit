@@ -4,6 +4,14 @@ Your Hasselblad X2D II RAW files from before firmware 1.3.16.1 contain everythin
 
 In practice, this means: Lightroom and Capture One apply lens corrections (distortion, vignetting, that kind of thing) based on how far away the camera thinks it was focused. Without a focus distance, they assume you were focused far away, which is wrong on close-up shots and makes the correction visibly off. Once a file has been through this tool, the correction is tuned for the actual focus distance, and close-up shots correct properly. The before/after pair below shows the difference.
 
+Whether a file qualifies depends on the firmware it was shot with, not on what firmware your camera runs today. In plain terms: files shot on firmware 1.2.7.11 through anything just before 1.3.16.1 are the ones this tool helps, since those write the raw data but not the finished distance tag. Files older than 1.2.7.11 don't have the data at all and get skipped. Files on 1.3.16.1 or newer already have the tag written by the camera itself and also get skipped, there's nothing for the tool to add.
+
+If you've updated firmware partway through owning the camera, your archive can span all three of those cases, and each file is judged on its own. You don't need to remember or look up what firmware you were running when: point the tool at your files and it sorts this out per file. If you want to check a single file yourself first, the `inspect` command prints exactly what firmware it was shot with:
+
+```
+python3 hb-focus-retrofit.py inspect B0001234.3FR
+```
+
 ## Before and after
 
 ![Lens correction with no focus distance: geometry looks off at close range](docs/images/before.jpg)
@@ -71,7 +79,7 @@ git clone https://github.com/kmichels/hasselblad-focus-retrofit.git
 
 That gives you a folder named exactly `hasselblad-focus-retrofit`, no `-main` suffix.
 
-**2. Move into that folder.**
+**2. Move into that folder.** (If you come back to this later in a new Terminal/PowerShell window, you'll need to repeat this step first, a new window always starts back at your home folder.)
 
 Use the folder name you actually see on disk. If you downloaded the ZIP:
 
@@ -104,6 +112,8 @@ IMG_0003.3FR  skip-nofields: no maker-note focus fields (firmware before 1.2.7.1
 
 DRY RUN (use --apply to write copies): skip-nofields=1, would-write=2
 ```
+
+The "(XCD 55V)" part is the tool reading the lens name straight out of each file's own metadata, you never have to tell it which lens you used, and it will correctly pick a different calibration per file if you shot with more than one lens in the same folder.
 
 Nothing gets written at this stage, this is only a preview so you know what to expect before step 5.
 
@@ -194,3 +204,6 @@ This is Windows' standard warning for files downloaded from the internet, not so
 
 **"no 3FR files found"**
 The `--source` folder you pointed at doesn't contain any `.3FR` files, or you pointed at the wrong folder. Double-check the path, for example by dragging the folder from Finder into Terminal after typing `--source ` to have Terminal fill in the correct path for you.
+
+**Terminal says it can't find `hb-focus-retrofit.py`**
+This happens if you closed Terminal/PowerShell and opened a new window later, a new window doesn't remember where you were. You need to move back into the tool's folder first, the same as step 2 in Quick start: type `cd ` (with a trailing space), then drag the tool's folder from Finder or File Explorer into the window, then press Return. After that, the commands work again.
