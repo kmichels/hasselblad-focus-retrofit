@@ -136,7 +136,7 @@ We measured how far off the raw formula is for the Hasselblad XCD 55V lens by sh
 
 Close focus is where the error is worst, which is exactly where distance-dependent lens corrections matter most. That's why this tool ships a calibration for the XCD 55V that corrects for this curve. If your lens has a calibration file, you get the corrected value automatically. If it doesn't yet, you still get the raw formula's number, but the report marks it **UNCALIBRATED** so you know it may be off by the amounts in the table above, not exact.
 
-The table above is specific to the XCD 55V. Other lenses are built differently, so the size of the error, and potentially which direction it leans, will not be identical for other lenses, only the fact that an uncorrected raw formula has some error is a safe general assumption. That's exactly why per-lens calibration exists, see "Calibrating your own lens" below if you'd like to build one for your own lens.
+The table above is specific to the XCD 55V. Other lenses are built differently, so the size of the error, and even which direction it leans, is not the same from lens to lens. On the XCD 55V the formula reads low at close focus (about -15%). A single measured frame with the XCD 90V read high instead, +9% at 0.5 m, the opposite direction. That's one data point on one lens, not a full calibration curve, but it's enough to show the error isn't a fixed offset you can just mentally correct for. That's exactly why per-lens calibration exists, see "Calibrating your own lens" below if you'd like to build one for your own lens.
 
 ## Calibrating your own lens
 
