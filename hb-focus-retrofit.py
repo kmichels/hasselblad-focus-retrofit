@@ -8,7 +8,10 @@ import argparse
 import dataclasses
 import json
 import logging
+import os
 import pathlib
+import shutil
+import stat
 import struct
 import sys
 from typing import List, Optional
@@ -242,7 +245,103 @@ def load_calibrations(dir_path):
 
 
 def cmd_retrofit(args):
-    raise NotImplementedError
+    source = pathlib.Path(args.source).expanduser().resolve()
+    if not source.is_dir():
+        print(f"error: source folder not found: {source}", file=sys.stderr)
+        return 1
+    dest = pathlib.Path(args.dest).expanduser().resolve() if args.dest else source / "retrofitted"
+
+    if args.calibration:
+        cal = Calibration.from_json(args.calibration)
+        cals = {cal.lens_model: cal}
+    else:
+        cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
+
+    files = sorted(p for p in source.iterdir()
+                   if p.is_file() and p.suffix.lower() == ".3fr"
+                   and p.parent != dest)
+    if not files:
+        print(f"no 3FR files found in {source}")
+        return 0
+
+    counts, failures = {}, 0
+    rows = []
+    for p in files:
+        try:
+            info = parse_file(p)
+            action, detail = classify(info)
+        except ParseError as exc:
+            rows.append((p.name, f"FAILED: {exc}"))
+            failures += 1
+            continue
+        phos = _find_sidecar(p)
+        if action != "write":
+            counts[action] = counts.get(action, 0) + 1
+            rows.append((p.name, f"{action}: {detail}"))
+            continue
+        d_est = thin_lens_m(info.maker_f, info.maker_m)
+        cal = cals.get(info.lens_model or "")
+        d = cal.correct(info.maker_m, d_est) if cal else d_est
+        label = f"calibrated ({cal.lens_model})" if cal else "UNCALIBRATED (raw formula)"
+        sidetxt = " +.phos" if phos else ""
+        if not args.apply:
+            rows.append((p.name, f"would write {d:.3f} m  {label}{sidetxt}"))
+            counts["would-write"] = counts.get("would-write", 0) + 1
+            continue
+        try:
+            _apply_one(p, info, d, dest, phos if args.copy_sidecars else None)
+            rows.append((p.name, f"wrote {d:.3f} m  {label}{sidetxt}"))
+            counts["written"] = counts.get("written", 0) + 1
+        except SkipExisting:
+            rows.append((p.name, "skip: already in destination"))
+            counts["skip-existing"] = counts.get("skip-existing", 0) + 1
+        except (OSError, ParseError) as exc:
+            rows.append((p.name, f"FAILED: {exc}"))
+            failures += 1
+
+    width = max(len(n) for n, _ in rows)
+    for name, msg in rows:
+        print(f"{name:<{width}}  {msg}")
+    mode = "APPLIED" if args.apply else "DRY RUN (use --apply to write copies)"
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    print(f"\n{mode}: {summary}" + (f", failures={failures}" if failures else ""))
+    return 1 if failures else 0
+
+
+class SkipExisting(Exception):
+    pass
+
+
+def _find_sidecar(p):
+    for ext in (".phos", ".PHOS"):
+        cand = p.with_suffix(ext)
+        if cand.exists():
+            return cand
+    return None
+
+
+def _apply_one(p, info, dist_m, dest, sidecar):
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / p.name
+    if target.exists():
+        raise SkipExisting
+    size = p.stat().st_size
+    if shutil.disk_usage(dest).free < size + 65536:
+        raise OSError(f"not enough free space in {dest} for {p.name}")
+    shutil.copy2(p, target)
+    # copy2 preserves permissions; a read-only original (locked card import)
+    # would make the copy unwritable for the r+b edit
+    os.chmod(target, os.stat(target).st_mode | stat.S_IWUSR)
+    try:
+        write_subject_distance(target, parse_file(target), dist_m)
+        got = parse_file(target).subject_distance
+        if got is None or abs(got - dist_m) > 0.001:
+            raise ParseError(f"verification failed (read back {got})")
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    if sidecar:
+        shutil.copy2(sidecar, dest / sidecar.name)
 
 
 def cmd_calibrate(args):
