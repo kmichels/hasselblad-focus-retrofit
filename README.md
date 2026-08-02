@@ -22,7 +22,7 @@ python3 hb-focus-retrofit.py inspect B0001234.3FR
 
 ![The same frame after retrofitting, with Lightroom applying the correction for the real focus distance](docs/images/after.jpg)
 
-Both images come from one frame: a Hasselblad X2D II with the XCD 55V, focused at about 0.64 metres, shot on firmware 1.2.7.16 (before the camera recorded focus distance itself). Nothing was changed in Lightroom between the two, and the RAW image data is byte for byte identical. The only difference is the focus distance the file carries.
+Both images come from one frame: a Hasselblad X2D II with the XCD 55V, focused at about 0.64 meters, shot on firmware 1.2.7.16 (before the camera recorded focus distance itself). Nothing was changed in Lightroom between the two, and the RAW image data is byte for byte identical. The only difference is the focus distance the file carries.
 
 ## Is this safe?
 
@@ -153,22 +153,24 @@ Close focus is where the error is worst, which is exactly where distance-depende
 
 The table above is specific to the XCD 55V. Other lenses are built differently, so the size of the error, and even which direction it leans, is not the same from lens to lens. On the XCD 55V the formula reads low at close focus (about -15%). A single measured frame with the XCD 90V read high instead, +9% at 0.5 m, the opposite direction. That's one data point on one lens, not a full calibration curve, but it's enough to show the error isn't a fixed offset you can just mentally correct for. That's exactly why per-lens calibration exists, see "Calibrating your own lens" below if you'd like to build one for your own lens.
 
-## Warning: teleconverters and extension tubes fool this tool
+## Warning: converters, extension tubes, and zooms fool this tool
 
-If you shoot a lens through the X Converter 1.7, or any teleconverter or extension tube, do not retrofit those frames. This is a warning about a wrong result, not a missing one.
+If you shoot a lens through the X Converter 1.7, any teleconverter or extension tube, or either of the XCD E-series zooms (XCD 20-35E, XCD 35-100E), do not retrofit those frames. These are warnings about a wrong result, not a missing one, and they share the same root cause: something that changes the optics isn't captured by the calibration key. The calibration only looks at the lens name in the file (`LensModel`), and that name doesn't change when a converter is attached or when a zoom moves off the focal length it was calibrated at.
 
-The camera writes the same lens name to the file whether the converter is attached or not. The shipped `calibration/xcd-135.json` was measured on the bare XCD 135 only. A frame shot with the XCD 135 plus the X Converter 1.7 reports the same "XCD 135" lens name, but the effective focal length is roughly 203 to 221 mm instead of the bare lens's 127 to 132 mm. Nothing in the file tells the tool which one it's looking at, so it applies the bare-lens calibration to the converter frame anyway and writes a distance that is wrong, not skipped. Lightroom and Capture One will then apply distance-dependent lens corrections using that wrong number.
+**Converters and extension tubes.** The camera writes the same lens name to the file whether the converter is attached or not. The shipped `calibration/xcd-135.json` was measured on the bare XCD 135 only. A frame shot with the XCD 135 plus the X Converter 1.7 reports the same "XCD 135" lens name, but the effective focal length is roughly 203 to 221 mm instead of the bare lens's 127 to 132 mm. Nothing in the file tells the tool which one it's looking at, so it applies the bare-lens calibration to the converter frame anyway and writes a distance that is wrong, not skipped. Lightroom and Capture One will then apply distance-dependent lens corrections using that wrong number.
 
 If you shoot the 135 with the 1.7x converter, keep those frames out of the source folder, or delete the retrofitted copies for them afterward. The same caution applies to any lens used with a converter or extension tube where a calibration exists for the bare lens: the tool cannot tell the two apart and will pick the wrong curve.
 
-Separately, converter frames also make poor material for building your own calibration ladder in the first place. With the converter attached, the camera's own reported focus distance stops tracking somewhere between roughly 1.7 and 3 metres. Five consecutive test frames all reported 1.66 m while the lens was demonstrably focusing further out. If you're building a calibration for a converter setup, expect that range to be unreliable and check your residuals carefully.
+Separately, converter frames also make poor material for building your own calibration ladder in the first place. With the converter attached, the camera's own reported focus distance stops tracking somewhere between roughly 1.7 and 3 meters. Five consecutive test frames all reported 1.66 m while the lens was demonstrably focusing further out. If you're building a calibration for a converter setup, expect that range to be unreliable and check your residuals carefully.
+
+**The XCD 20-35E and XCD 35-100E zooms.** Calibration in this tool is a single curve per lens keyed on magnification, and that only holds when focal length is fixed. On a zoom it isn't. At a given magnification, 20 mm and 35 mm are different optical situations that want different corrections, so one curve cannot describe both. A ladder shot at a single focal length would produce a calibration correct at that setting and wrong at every other one, which is worse than no calibration at all, so neither zoom ships with one. Zoom frames still get a real distance from the raw formula and are marked **UNCALIBRATED** in the report, same as any other lens without a curve. A correct fix needs a calibration surface across focal length, not a single curve, and that's future work, not something you can work around by shooting a ladder at one focal length today.
 
 ## Calibrating your own lens
 
 If your lens isn't calibrated yet, you can build a calibration yourself in a few minutes:
 
 1. Update your camera's firmware to 1.3.16.1 or later. Newer firmware reports its own focus distance, which is what you'll calibrate against.
-2. Shoot a distance ladder: start at your lens's minimum focus distance, then step back roughly every half metre out to about 3 metres. Six to eight frames total. Any subject works, a tripod is optional, and sharpness doesn't matter, you're only using the reported distance, not the image content.
+2. Shoot a distance ladder: start at your lens's minimum focus distance, then step back roughly every half meter out to about 3 meters. Six to eight frames total. Any subject works, a tripod is optional, and sharpness doesn't matter, you're only using the reported distance, not the image content.
 3. Put those frames in their own folder (one lens per folder) and run:
 
 ```

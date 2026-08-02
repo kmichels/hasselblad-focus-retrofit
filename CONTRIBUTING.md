@@ -5,15 +5,16 @@
 The most useful contribution is a calibration for a lens that isn't covered yet.
 
 1. Update your camera's firmware to 1.3.16.1 or later. That firmware reports its own focus distance, which the calibration process fits against.
-2. Shoot a ladder: minimum focus distance, then roughly every half metre out to about 3 metres, 6-8 frames, any subject, tripod optional, sharpness doesn't matter. Never mix bare-lens and converter or extension-tube frames in the same ladder folder: `derive_calibration` groups frames only by the lens name in the file, so a bare lens and that same lens with a converter attached (which report the same name but have different effective focal lengths) will get silently fit into one bad curve instead of two correct ones. Shoot and submit them as separate lens folders.
-3. Put those frames in their own folder (one lens per folder) and run:
+2. Shoot a ladder: minimum focus distance, then roughly every half meter out to about 3 meters, 6-8 frames, any subject, tripod optional, sharpness doesn't matter. Never mix bare-lens and converter or extension-tube frames in the same ladder folder: `derive_calibration` groups frames only by the lens name in the file, so a bare lens and that same lens with a converter attached (which report the same name but have different effective focal lengths) will get silently fit into one bad curve instead of two correct ones. Shoot and submit them as separate lens folders.
+3. Don't submit calibrations for the XCD 20-35E or XCD 35-100E zooms right now. The calibration model is one curve per lens keyed on magnification, which assumes a fixed focal length. A ladder shot at one focal length on a zoom would produce a curve that's correct at that setting and wrong everywhere else on the zoom range, which the tool has no way to detect or warn about once it's in `calibration/`. Same root cause as the converter case above: the calibration key is the lens name only, and it doesn't capture what changed the optics. Zoom support needs a calibration surface across focal length, not a single curve, and that's not built yet.
+4. Put those frames in their own folder (one lens per folder) and run:
 
 ```
 python3 hb-focus-retrofit.py calibrate --source /path/to/ladder --out my-lens.json
 ```
 
-4. Check the printed residuals. Under 2% is good. If residuals are high, check that the ladder actually spans minimum focus to 3 m and that firmware was 1.3.16.1+ for every frame.
-5. Submit it one of two ways:
+5. Check the printed residuals. Under 2% is good. If residuals are high, check that the ladder actually spans minimum focus to 3 m and that firmware was 1.3.16.1+ for every frame.
+6. Submit it one of two ways:
    - **GitHub issue**: open a new issue titled "Calibration submission: <lens name>", attach the JSON file, and fill in the template below.
    - **Pull request**: add the file at `calibration/<lens-name>.json` and open a PR.
 
