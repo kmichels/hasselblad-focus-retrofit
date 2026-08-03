@@ -156,12 +156,13 @@ def test_cli_with_contributor_no_reminder(tool, tmp_path, capsys, monkeypatch):
     assert "no contributor name recorded" not in out
 
 
-def test_all_sentinel_frames_explain_manual_focus(tool, tmp_path):
+def test_all_sentinel_frames_explain_cause(tool, tmp_path):
     # The real-world failure from a contributor: every frame stamped with the
-    # 0xFFFFFFFF "no distance recorded" sentinel in SubjectDistance (cause
-    # not fully pinned down; MF on current firmware records fine). The error
-    # must say what happened and prescribe the known-good procedure
-    # (autofocus, moving between frames), not just "0 usable frames".
+    # 0xFFFFFFFF "no distance recorded" sentinel in SubjectDistance (the
+    # field latches on some AF acquisitions and resets on lens change). The
+    # error must say what happened and prescribe the known-good procedure
+    # (fresh AF lock per frame, moving between shots), not just "0 usable
+    # frames".
     src = tmp_path / "ladder"
     src.mkdir()
     for i, (m, f, _) in enumerate(LADDER):
@@ -185,3 +186,84 @@ def test_all_untagged_frames_explain_firmware(tool, tmp_path):
     with pytest.raises(tool.CalibrationError) as exc:
         tool.derive_calibration(src)
     assert "firmware" in str(exc.value)
+
+
+def test_byte_identical_rungs_are_deduped(tool, tmp_path):
+    # Two frames latching the same AF acquisition produce byte-identical
+    # (m, f, distance) triples. Emitting both created a calibration file
+    # that from_json rejects for duplicate m — the XCD 90V outage. The
+    # calibrate step must collapse them and say so.
+    src = make_ladder(tmp_path)
+    m, f, dist = LADDER[3]
+    build_3fr(src / "dup.3FR", software="1.3.16.1", maker_f=f, maker_m=m,
+              subject_distance=(int(dist * 1000), 1000))
+    doc, warnings = tool.derive_calibration(src)
+    assert len(doc["points"]) == 9
+    assert doc["provenance"]["frames"] == 9
+    assert any("identical" in w for w in warnings)
+    ms = [p["m"] for p in doc["points"]]
+    assert len(ms) == len(set(ms))
+
+
+def test_same_m_conflicting_distance_raises(tool, tmp_path):
+    # Same maker-note focus position but two different recorded distances
+    # cannot both be right; refuse rather than pick one.
+    src = make_ladder(tmp_path)
+    m, f, dist = LADDER[3]
+    build_3fr(src / "dup.3FR", software="1.3.16.1", maker_f=f, maker_m=m,
+              subject_distance=(int(dist * 1000) + 200, 1000))
+    with pytest.raises(tool.CalibrationError) as exc:
+        tool.derive_calibration(src)
+    assert "conflicting" in str(exc.value)
+
+
+def test_latched_distance_raises(tool, tmp_path):
+    # Field report (Steven Behnke, 2026-08-03): the camera latches
+    # SubjectDistance on some AF acquisitions and stamps the stale value on
+    # later frames even as real focus moves. Identical distances across
+    # focus positions that imply very different distances must be refused,
+    # not silently consumed as calibration points.
+    src = tmp_path / "ladder"
+    src.mkdir()
+    for i, (m, f, _) in enumerate(LADDER):
+        build_3fr(src / f"L{i:02d}.3FR", software="1.3.16.2", maker_f=f, maker_m=m,
+                  subject_distance=(4880, 1000))
+    with pytest.raises(tool.CalibrationError) as exc:
+        tool.derive_calibration(src)
+    msg = str(exc.value)
+    assert "latch" in msg
+    assert "4.88" in msg
+    assert "exiftool" in msg
+
+
+def test_close_repeated_distances_still_pass(tool, tmp_path):
+    # Legit ladders repeat a rounded distance on adjacent rungs whose focus
+    # positions nearly agree (shipped data has spreads under 5%). Those must
+    # not trip the latch guard.
+    src = tmp_path / "ladder"
+    src.mkdir()
+    points = list(LADDER)
+    m, f, dist = points[3]
+    points.append((m * 1.03, f, dist))  # 3% m spread, same rounded distance
+    for i, (pm, pf, pd) in enumerate(points):
+        build_3fr(src / f"L{i:02d}.3FR", software="1.3.16.2", maker_f=pf, maker_m=pm,
+                  subject_distance=(int(pd * 1000), 1000))
+    doc, _ = tool.derive_calibration(src)
+    assert len(doc["points"]) == 10
+
+
+def test_sentinel_hint_describes_latching(tool, tmp_path):
+    # The old hint blamed firmware / manual focus; the observed mechanism is
+    # the latch. The hint must explain it and prescribe the card-side
+    # exiftool check before a full reshoot.
+    src = tmp_path / "ladder"
+    src.mkdir()
+    for i, (m, f, _) in enumerate(LADDER):
+        build_3fr(src / f"M{i:02d}.3FR", software="1.3.16.2", maker_f=f, maker_m=m,
+                  subject_distance=(4294967295, 1))
+    with pytest.raises(tool.CalibrationError) as exc:
+        tool.derive_calibration(src)
+    msg = str(exc.value)
+    assert "latch" in msg
+    assert "exiftool" in msg
+    assert "lens change" in msg

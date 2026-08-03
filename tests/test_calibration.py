@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -112,3 +113,18 @@ def test_duplicate_m_points_is_skipped_not_fatal(tool, tmp_path, caplog):
     assert "Bad Duplicate M" not in cals
     assert cals == {}
     assert any("bad-duplicate-m.json" in r.message for r in caplog.records)
+
+
+def test_shipped_calibrations_all_load(tool, caplog):
+    # Regression for the XCD 90V outage: a duplicate m value in
+    # calibration/xcd-90v.json made from_json raise, and load_calibrations
+    # demoted that to an easy-to-miss warning, silently shipping the lens
+    # uncalibrated. Every JSON in the shipped calibration dir must load.
+    cal_dir = Path(tool.__file__).resolve().parent / "calibration"
+    shipped = sorted(p.name for p in cal_dir.glob("*.json"))
+    assert shipped, "shipped calibration dir is empty?"
+    with caplog.at_level("WARNING"):
+        cals = tool.load_calibrations(cal_dir)
+    assert not caplog.records, [r.message for r in caplog.records]
+    assert len(cals) == len(shipped)
+    assert "XCD 90V" in cals

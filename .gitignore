@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 tests/local/
+
+# Claude Code local process markers
+.tdd-optional
+.500-line-exempt
+.planning/

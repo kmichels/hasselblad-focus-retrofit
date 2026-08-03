@@ -410,10 +410,13 @@ def _reject_hints(rejects):
         hints.append(
             f"{rejects['sentinel']} frame(s) carry the camera's 'no distance recorded' "
             "marker (SubjectDistance = 4294967295), so there is nothing to calibrate "
-            "against. Update to the latest camera firmware and reshoot using autofocus, "
-            "physically moving the camera or the target between frames so each shot "
-            "locks at a different distance. Autofocus ladders shot this way have "
-            "recorded a real distance in every frame on every firmware tested.")
+            "against. The camera only latches a distance on some autofocus "
+            "acquisitions and resets to this marker on every lens change, so frames "
+            "shot right after mounting a lens, or focused by racking the focus ring, "
+            "never record one. Reshoot so every frame gets a fresh AF lock "
+            "(physically move the camera or the target between shots), and verify on "
+            "the card before committing to a full ladder: after 2-3 test frames, run "
+            "exiftool -s3 -SubjectDistance *.3FR and confirm real distances appear.")
     if rejects["no_distance"]:
         hints.append(
             f"{rejects['no_distance']} frame(s) have no SubjectDistance tag at all, "
@@ -431,6 +434,60 @@ def _reject_hints(rejects):
     if rejects["unreadable"]:
         hints.append(f"{rejects['unreadable']} file(s) could not be parsed as 3FR.")
     return "".join("\n  " + h for h in hints)
+
+
+def _dedupe_points(points):
+    """Collapse byte-identical (m, f, distance) points into one.
+
+    The camera can stamp two frames with the exact same latched AF
+    acquisition; emitting both produces a duplicate m value that
+    Calibration.from_json rejects at load (this silently uncalibrated the
+    XCD 90V). Same m with a *different* recorded distance is a conflict the
+    contributor has to resolve, not a choice the tool can make.
+    """
+    out, warnings, dropped = [], [], 0
+    for pt in points:  # already sorted by m
+        if out and pt["m"] == out[-1]["m"]:
+            if (pt["f"] == out[-1]["f"]
+                    and pt["camera_distance_m"] == out[-1]["camera_distance_m"]):
+                dropped += 1
+                continue
+            raise CalibrationError(
+                f"conflicting frames at focus position m={pt['m']!r}: distances "
+                f"{out[-1]['camera_distance_m']!r} m and "
+                f"{pt['camera_distance_m']!r} m. Remove one of the frames and rerun.")
+        out.append(pt)
+    if dropped:
+        warnings.append(
+            f"dropped {dropped} frame(s) byte-identical to another rung "
+            "(same focus position and distance); calibration is unaffected")
+    return out, warnings
+
+
+# A recorded distance repeated across frames is legitimate when the focus
+# positions nearly agree (rounded rungs on shipped ladders spread under ~5%),
+# and a stale latch when they don't. 10% leaves margin on both sides of the
+# observed cases (legit <=4.8%, latched ~250%).
+_LATCH_SPREAD = 1.10
+
+
+def _check_latched_distances(points):
+    by_dist = {}
+    for p in points:
+        by_dist.setdefault(p["camera_distance_m"], []).append(p)
+    for dist, grp in sorted(by_dist.items()):
+        ests = [thin_lens_m(p["f"], p["m"]) for p in grp]
+        if len(grp) > 1 and max(ests) / min(ests) > _LATCH_SPREAD:
+            raise CalibrationError(
+                f"{len(grp)} frames all report exactly {dist:g} m while their focus "
+                f"positions imply {min(ests):.2f}-{max(ests):.2f} m. The camera "
+                "latches a distance on some AF acquisitions and re-stamps the stale "
+                "value on later frames, so these are not real measurements and "
+                "would poison the calibration. Reshoot so every frame gets a fresh "
+                "AF lock (physically move the camera or target between shots), and "
+                "verify on the card first: after 2-3 test frames, run "
+                "exiftool -s3 -SubjectDistance *.3FR and confirm a different real "
+                "distance on each frame before shooting the full ladder.")
 
 
 def derive_calibration(folder):
@@ -477,6 +534,13 @@ def derive_calibration(folder):
     points = sorted(
         ({"m": f.maker_m, "f": f.maker_f, "camera_distance_m": f.subject_distance}
          for f in frames), key=lambda p: p["m"])
+    points, dedupe_warnings = _dedupe_points(points)
+    warnings.extend(dedupe_warnings)
+    if len(points) < 5:
+        raise CalibrationError(
+            f"only {len(points)} distinct points for {lens} in {folder} after "
+            "collapsing identical frames (need at least 5)")
+    _check_latched_distances(points)
     dists = [p["camera_distance_m"] for p in points]
     if min(dists) > 0.7:
         warnings.append("ladder does not reach below 0.7 m; near-field correction will be extrapolation-clamped")
