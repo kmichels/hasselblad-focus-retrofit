@@ -172,7 +172,7 @@ Separately, converter frames also make poor material for building your own calib
 If your lens isn't calibrated yet, you can build a calibration yourself in a few minutes:
 
 1. Update your camera's firmware to 1.3.16.1 or later. Newer firmware reports its own focus distance, which is what you'll calibrate against.
-2. Shoot a distance ladder: about 10 frames spread between your lens's minimum focus distance and roughly 3 meters. The steps do not have to be evenly spaced, so you can eyeball it rather than measuring. Shoot wide open. Any subject works, a tripod is optional, and sharpness doesn't matter, you're only using the distance the camera reports, not the image content.
+2. Shoot a distance ladder: about 10 frames spread between your lens's minimum focus distance and roughly 3 meters. **Use autofocus, and physically move the camera or the target between frames.** Ladders shot by racking the focus ring manually have come back with every frame stamped "no distance recorded" (SubjectDistance = 4294967295), which the calibrate step rejects; frames where autofocus locked always carry a real distance. The steps do not have to be evenly spaced and you never need to measure anything, just let AF lock at a different distance each time. Shoot wide open. Any subject works, a tripod is optional, and sharpness doesn't matter, you're only using the distance the camera reports, not the image content.
 3. Put those frames in their own folder (one lens per folder) and run:
 
 ```

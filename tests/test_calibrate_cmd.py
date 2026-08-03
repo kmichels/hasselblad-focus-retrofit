@@ -154,3 +154,33 @@ def test_cli_with_contributor_no_reminder(tool, tmp_path, capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     assert "no contributor name recorded" not in out
+
+
+def test_all_sentinel_frames_explain_manual_focus(tool, tmp_path):
+    # The real-world failure from a contributor: every frame shot with manual
+    # focus, so the camera stamped the 0xFFFFFFFF "no distance recorded"
+    # sentinel into SubjectDistance. The error must say what happened and
+    # that autofocus is required, not just "0 usable frames".
+    src = tmp_path / "ladder"
+    src.mkdir()
+    for i, (m, f, _) in enumerate(LADDER):
+        build_3fr(src / f"M{i:02d}.3FR", software="1.3.16.1", maker_f=f, maker_m=m,
+                  subject_distance=(4294967295, 1))
+    with pytest.raises(tool.CalibrationError) as exc:
+        tool.derive_calibration(src)
+    msg = str(exc.value)
+    assert "autofocus" in msg
+    assert "no distance recorded" in msg
+    assert "9" in msg  # how many frames were affected
+
+
+def test_all_untagged_frames_explain_firmware(tool, tmp_path):
+    # Old-firmware frames have no SubjectDistance tag at all; the error must
+    # point at the firmware requirement.
+    src = tmp_path / "ladder"
+    src.mkdir()
+    for i, (m, f, _) in enumerate(LADDER):
+        build_3fr(src / f"O{i:02d}.3FR", software="1.2.7.16", maker_f=f, maker_m=m)
+    with pytest.raises(tool.CalibrationError) as exc:
+        tool.derive_calibration(src)
+    assert "firmware" in str(exc.value)

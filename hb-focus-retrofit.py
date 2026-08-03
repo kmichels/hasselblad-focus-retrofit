@@ -397,24 +397,71 @@ class CalibrationError(Exception):
     pass
 
 
+# SubjectDistance numerator 0xFFFFFFFF is the camera's "no distance recorded"
+# marker (EXIF infinity sentinel). Denominators of 1 and 1000 both leave the
+# value far above any real ladder distance, so anything at or beyond
+# 0xFFFFFFFF/1000 meters is the sentinel, not a measurement.
+_SD_SENTINEL_M = 0xFFFFFFFF / 1000
+
+
+def _reject_hints(rejects):
+    hints = []
+    if rejects["sentinel"]:
+        hints.append(
+            f"{rejects['sentinel']} frame(s) carry the camera's 'no distance recorded' "
+            "marker (SubjectDistance = 4294967295). The camera only records a real "
+            "focus distance when autofocus locks; this usually means the ladder was "
+            "shot with manual focus. Reshoot using autofocus, physically moving the "
+            "camera or the target between frames so each shot locks at a different "
+            "distance.")
+    if rejects["no_distance"]:
+        hints.append(
+            f"{rejects['no_distance']} frame(s) have no SubjectDistance tag at all, "
+            "which usually means camera firmware older than 1.3.16.1. Update the "
+            "firmware and reshoot.")
+    if rejects["implausible"]:
+        hints.append(
+            f"{rejects['implausible']} frame(s) report a distance of 50 m or more; "
+            "shoot the ladder between the lens's minimum focus distance and roughly "
+            "3 m.")
+    if rejects["no_maker"]:
+        hints.append(
+            f"{rejects['no_maker']} frame(s) lack the maker-note focus fields the "
+            "tool calibrates against (not from an X2D II?).")
+    if rejects["unreadable"]:
+        hints.append(f"{rejects['unreadable']} file(s) could not be parsed as 3FR.")
+    return "".join("\n  " + h for h in hints)
+
+
 def derive_calibration(folder):
     folder = pathlib.Path(folder)
     frames = []
+    rejects = {"sentinel": 0, "no_distance": 0, "implausible": 0,
+               "no_maker": 0, "unreadable": 0}
     for p in sorted(folder.iterdir()):
         if p.suffix.lower() != ".3fr":
             continue
         try:
             info = parse_file(p)
         except ParseError:
+            rejects["unreadable"] += 1
             continue
         sd = info.subject_distance
-        if (info.maker_f and info.maker_m and info.maker_m > 0
-                and sd is not None and 0 < sd < 50):
+        if not (info.maker_f and info.maker_m and info.maker_m > 0):
+            rejects["no_maker"] += 1
+        elif sd is None or sd == 0:
+            rejects["no_distance"] += 1
+        elif sd >= _SD_SENTINEL_M:
+            rejects["sentinel"] += 1
+        elif not (0 < sd < 50):
+            rejects["implausible"] += 1
+        else:
             frames.append(info)
     if len(frames) < 5:
         raise CalibrationError(
             f"only {len(frames)} usable frames in {folder} (need at least 5: "
-            "new-firmware shots with real focus distances)")
+            "new-firmware shots with real focus distances)"
+            + _reject_hints(rejects))
     lens = frames[0].lens_model or "unknown-lens"
     others = sorted({f.lens_model for f in frames} - {frames[0].lens_model})
     frames = [f for f in frames if f.lens_model == frames[0].lens_model]
