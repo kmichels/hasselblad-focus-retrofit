@@ -114,3 +114,43 @@ def test_cli_refuses_to_overwrite_default_output(tool, tmp_path, monkeypatch):
     rc = tool.main(["calibrate", "--source", str(src)])
     assert rc == 1
     assert target.read_text() == "PRE-EXISTING CONTENT\n"
+
+
+def test_cli_prints_absolute_path(tool, tmp_path, capsys, monkeypatch):
+    src = make_ladder(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    rc = tool.main(["calibrate", "--source", str(src)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    expected = (tmp_path / "xcd-55v.json").resolve()
+    assert str(expected) in out
+
+
+def test_cli_contributor_flag_lands_in_json(tool, tmp_path, monkeypatch):
+    src = make_ladder(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    rc = tool.main(["calibrate", "--source", str(src), "--contributor", "Jane Doe"])
+    assert rc == 0
+    doc = json.loads((tmp_path / "xcd-55v.json").read_text())
+    assert doc["provenance"]["contributor"] == "Jane Doe"
+
+
+def test_cli_no_contributor_reminds(tool, tmp_path, capsys, monkeypatch):
+    src = make_ladder(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    rc = tool.main(["calibrate", "--source", str(src)])
+    assert rc == 0
+    doc = json.loads((tmp_path / "xcd-55v.json").read_text())
+    assert doc["provenance"]["contributor"] == ""
+    out = capsys.readouterr().out
+    assert "no contributor name recorded" in out
+    assert "--contributor" in out
+
+
+def test_cli_with_contributor_no_reminder(tool, tmp_path, capsys, monkeypatch):
+    src = make_ladder(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    rc = tool.main(["calibrate", "--source", str(src), "--contributor", "Jane Doe"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no contributor name recorded" not in out

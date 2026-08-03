@@ -10,13 +10,18 @@ The most useful contribution is a calibration for a lens that isn't covered yet.
 4. Put those frames in their own folder (one lens per folder) and run:
 
 ```
-python3 hb-focus-retrofit.py calibrate --source /path/to/ladder --out my-lens.json
+python3 hb-focus-retrofit.py calibrate --source /path/to/ladder --out my-lens.json --contributor "Your Name"
 ```
 
+`--contributor` records your name or handle in the calibration file so you get credit for it. If you leave it off, the tool will remind you to re-run with it before you submit.
+
+The tool prints the absolute path of the file it wrote, e.g. `wrote /Users/you/Desktop/my-lens.json (7 points, lens XCD 90V)`. That is the file you attach or paste in step 6.
+
 5. Check the printed residuals. Under 2% is good. If residuals are high, check that the ladder actually spans minimum focus to 3 m and that firmware was 1.3.16.1+ for every frame.
-6. Submit it one of two ways:
-   - **GitHub issue**: open a new issue titled "Calibration submission: <lens name>", attach the JSON file, and fill in the template below.
-   - **Pull request**: add the file at `calibration/<lens-name>.json` and open a PR.
+6. Submit it one of three ways, easiest first:
+   - **Email** (no GitHub account needed): send the JSON file to **hasselblad@agentmail.to** with subject "Calibration submission: <lens name>". Attach the file (it's plain JSON, email attachments handle that fine) and include the same template fields below in the body.
+   - **GitHub issue**: open a new issue titled "Calibration submission: <lens name>", paste the JSON file's contents into the issue body inside a fenced code block, and fill in the template below. GitHub may reject a raw `.json` attachment, but pasting always works. If you'd rather attach a file, zip it first.
+   - **Pull request**: add the file at `calibration/<lens-name>.json` and open a PR. Requires a GitHub account.
 
 ### Calibration submission template
 

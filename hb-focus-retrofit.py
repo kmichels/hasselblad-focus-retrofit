@@ -485,6 +485,7 @@ def cmd_calibrate(args):
         print(f"error: {exc}", file=sys.stderr)
         return 1
     doc["provenance"]["date"] = datetime.date.today().isoformat()
+    doc["provenance"]["contributor"] = args.contributor or ""
     if args.out:
         out = pathlib.Path(args.out)
     else:
@@ -494,7 +495,10 @@ def cmd_calibrate(args):
                   f"different path", file=sys.stderr)
             return 1
     out.write_text(json.dumps(doc, indent=2) + "\n")
-    print(f"wrote {out} ({doc['provenance']['frames']} points, lens {doc['lens_model']})")
+    print(f"wrote {out.resolve()} ({doc['provenance']['frames']} points, lens {doc['lens_model']})")
+    if not args.contributor:
+        print('note: no contributor name recorded. Re-run with --contributor "Your Name" '
+              "if you plan to submit this, so you get credit.")
     for w in warnings:
         print(f"warning: {w}")
     print("\nleave-one-out residuals (each point predicted by the others):")
@@ -558,6 +562,8 @@ def build_parser():
     c = sub.add_parser("calibrate", help="derive a lens calibration from new-firmware ladder shots")
     c.add_argument("--source", required=True, help="folder with ladder shots (one lens per folder)")
     c.add_argument("--out", default=None, help="output JSON path (default: <lens>.json in current folder)")
+    c.add_argument("--contributor", default=None,
+                    help="your name or handle, recorded in the calibration file so you get credit")
     c.set_defaults(func=cmd_calibrate)
 
     i = sub.add_parser("inspect", help="show what the tool sees in a file (never writes)")

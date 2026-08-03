@@ -174,11 +174,13 @@ If your lens isn't calibrated yet, you can build a calibration yourself in a few
 3. Put those frames in their own folder (one lens per folder) and run:
 
 ```
-python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V-Ladder
+python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V-Ladder --contributor "Your Name"
 ```
 
+`--contributor` records your name or handle in the calibration file so you get credit if you submit it. The tool prints the absolute path of the file it just wrote, so you know exactly where to find it, for example `wrote /Users/you/Desktop/xcd-55v.json (7 points, lens XCD 55V)`.
+
 4. The tool prints residuals, meaning how far off the fitted curve is from each of your measured points, as a percentage. Under 2% means your ladder shots were consistent enough to trust; higher than that usually means a step in the ladder was off (wrong distance, wrong lens selected, that kind of thing), and it's worth reshooting.
-5. Share it with the project: open a GitHub issue with the resulting calibration file attached, or open a pull request adding it under `calibration/<lens-name>.json` (for example, a 90V calibration would be `calibration/xcd-90v.json`, following the same naming pattern as the shipped `calibration/xcd-55v.json`). See `CONTRIBUTING.md` for the exact steps.
+5. Share it with the project: no GitHub account? Email the file to hasselblad@agentmail.to instead. Otherwise, open a GitHub issue with the resulting calibration file's contents pasted in, or open a pull request adding it under `calibration/<lens-name>.json` (for example, a 90V calibration would be `calibration/xcd-90v.json`, following the same naming pattern as the shipped `calibration/xcd-55v.json`). See `CONTRIBUTING.md` for the exact steps.
 
 ## FAQ
 
