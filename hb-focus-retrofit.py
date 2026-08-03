@@ -453,9 +453,10 @@ def _dedupe_points(points):
                 dropped += 1
                 continue
             raise CalibrationError(
-                f"conflicting frames at focus position m={pt['m']!r}: distances "
-                f"{out[-1]['camera_distance_m']!r} m and "
-                f"{pt['camera_distance_m']!r} m. Remove one of the frames and rerun.")
+                f"conflicting frames at focus position m={pt['m']!r}: "
+                f"(f={out[-1]['f']!r} mm, {out[-1]['camera_distance_m']!r} m) vs "
+                f"(f={pt['f']!r} mm, {pt['camera_distance_m']!r} m). "
+                "Remove one of the frames and rerun.")
         out.append(pt)
     if dropped:
         warnings.append(
@@ -477,7 +478,9 @@ def _check_latched_distances(points):
         by_dist.setdefault(p["camera_distance_m"], []).append(p)
     for dist, grp in sorted(by_dist.items()):
         ests = [thin_lens_m(p["f"], p["m"]) for p in grp]
-        if len(grp) > 1 and max(ests) / min(ests) > _LATCH_SPREAD:
+        # min(ests) > 0 is belt-and-braces: frames with non-positive f or m
+        # are rejected before points are built, so ests are positive here.
+        if len(grp) > 1 and min(ests) > 0 and max(ests) / min(ests) > _LATCH_SPREAD:
             raise CalibrationError(
                 f"{len(grp)} frames all report exactly {dist:g} m while their focus "
                 f"positions imply {min(ests):.2f}-{max(ests):.2f} m. The camera "
