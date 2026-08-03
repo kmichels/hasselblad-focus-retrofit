@@ -34,6 +34,8 @@ Yes. Three things make this low-risk:
 
 If you ever want to undo this, just delete the `retrofitted` folder. Your originals were never touched.
 
+Nothing about your files or your usage is collected or sent anywhere. [PRIVACY.md](PRIVACY.md) spells out exactly what this project does and does not receive, including what happens to any file you send in for analysis.
+
 ## What you need
 
 - A Mac, a Windows PC, or a Linux machine.
