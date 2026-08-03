@@ -1,57 +1,142 @@
 {
-  "lens_model": "XCD 55V",
-  "points": [
-    {
-      "m": 0.01803,
-      "f": 55.74468,
-      "camera_distance_m": 2.91
-    },
-    {
-      "m": 0.02079,
-      "f": 55.61001,
-      "camera_distance_m": 2.6
-    },
-    {
-      "m": 0.0265,
-      "f": 55.33241,
-      "camera_distance_m": 2.14
-    },
-    {
-      "m": 0.04075,
-      "f": 54.64756,
-      "camera_distance_m": 1.48
-    },
-    {
-      "m": 0.05659,
-      "f": 53.8988,
-      "camera_distance_m": 1.1
-    },
-    {
-      "m": 0.08261,
-      "f": 52.69814,
-      "camera_distance_m": 0.77
-    },
-    {
-      "m": 0.10531,
-      "f": 51.68175,
-      "camera_distance_m": 0.62
-    },
-    {
-      "m": 0.13196,
-      "f": 50.52679,
-      "camera_distance_m": 0.51
-    },
-    {
-      "m": 0.15308,
-      "f": 49.64184,
-      "camera_distance_m": 0.44
-    }
-  ],
-  "provenance": {
-    "body": "X2D II 100C",
-    "firmware": "1.3.16.1",
-    "frames": 9,
-    "contributor": "Konrad Michels",
-    "date": "2026-08-02"
+ "lens_model": "XCD 55V",
+ "points": [
+  {
+   "m": 0.01803,
+   "f": 55.74468,
+   "camera_distance_m": 2.91
+  },
+  {
+   "m": 0.02079,
+   "f": 55.61001,
+   "camera_distance_m": 2.6
+  },
+  {
+   "m": 0.02127,
+   "f": 55.58651,
+   "camera_distance_m": 2.56
+  },
+  {
+   "m": 0.02416,
+   "f": 55.44583,
+   "camera_distance_m": 2.31
+  },
+  {
+   "m": 0.0265,
+   "f": 55.33241,
+   "camera_distance_m": 2.14
+  },
+  {
+   "m": 0.02698,
+   "f": 55.30911,
+   "camera_distance_m": 2.11
+  },
+  {
+   "m": 0.03124,
+   "f": 55.10351,
+   "camera_distance_m": 1.86
+  },
+  {
+   "m": 0.03583,
+   "f": 54.88287,
+   "camera_distance_m": 1.66
+  },
+  {
+   "m": 0.04075,
+   "f": 54.64756,
+   "camera_distance_m": 1.48
+  },
+  {
+   "m": 0.04123,
+   "f": 54.62478,
+   "camera_distance_m": 1.46
+  },
+  {
+   "m": 0.04566,
+   "f": 54.41411,
+   "camera_distance_m": 1.34
+  },
+  {
+   "m": 0.05212,
+   "f": 54.10892,
+   "camera_distance_m": 1.18
+  },
+  {
+   "m": 0.05618,
+   "f": 53.91784,
+   "camera_distance_m": 1.1
+  },
+  {
+   "m": 0.05659,
+   "f": 53.8988,
+   "camera_distance_m": 1.1
+  },
+  {
+   "m": 0.0653,
+   "f": 53.49262,
+   "camera_distance_m": 0.96
+  },
+  {
+   "m": 0.07096,
+   "f": 53.23134,
+   "camera_distance_m": 0.89
+  },
+  {
+   "m": 0.08208,
+   "f": 52.72242,
+   "camera_distance_m": 0.77
+  },
+  {
+   "m": 0.08261,
+   "f": 52.69814,
+   "camera_distance_m": 0.77
+  },
+  {
+   "m": 0.09074,
+   "f": 52.33076,
+   "camera_distance_m": 0.71
+  },
+  {
+   "m": 0.1024,
+   "f": 51.81016,
+   "camera_distance_m": 0.64
+  },
+  {
+   "m": 0.10531,
+   "f": 51.68175,
+   "camera_distance_m": 0.62
+  },
+  {
+   "m": 0.11176,
+   "f": 51.39823,
+   "camera_distance_m": 0.59
+  },
+  {
+   "m": 0.13196,
+   "f": 50.52679,
+   "camera_distance_m": 0.51
+  },
+  {
+   "m": 0.13605,
+   "f": 50.35331,
+   "camera_distance_m": 0.49
+  },
+  {
+   "m": 0.15308,
+   "f": 49.64184,
+   "camera_distance_m": 0.44
+  },
+  {
+   "m": 0.15353,
+   "f": 49.62332,
+   "camera_distance_m": 0.43
   }
+ ],
+ "provenance": {
+  "body": "X2D II 100C",
+  "firmware": "1.3.16.1 + 1.3.16.2",
+  "frames": 26,
+  "contributor": "Konrad Michels",
+  "date": "2026-08-03"
+ }
 }
