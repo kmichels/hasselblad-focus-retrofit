@@ -409,11 +409,11 @@ def _reject_hints(rejects):
     if rejects["sentinel"]:
         hints.append(
             f"{rejects['sentinel']} frame(s) carry the camera's 'no distance recorded' "
-            "marker (SubjectDistance = 4294967295). The camera only records a real "
-            "focus distance when autofocus locks; this usually means the ladder was "
-            "shot with manual focus. Reshoot using autofocus, physically moving the "
-            "camera or the target between frames so each shot locks at a different "
-            "distance.")
+            "marker (SubjectDistance = 4294967295), so there is nothing to calibrate "
+            "against. Update to the latest camera firmware and reshoot using autofocus, "
+            "physically moving the camera or the target between frames so each shot "
+            "locks at a different distance. Autofocus ladders shot this way have "
+            "recorded a real distance in every frame on every firmware tested.")
     if rejects["no_distance"]:
         hints.append(
             f"{rejects['no_distance']} frame(s) have no SubjectDistance tag at all, "

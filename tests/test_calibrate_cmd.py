@@ -157,10 +157,11 @@ def test_cli_with_contributor_no_reminder(tool, tmp_path, capsys, monkeypatch):
 
 
 def test_all_sentinel_frames_explain_manual_focus(tool, tmp_path):
-    # The real-world failure from a contributor: every frame shot with manual
-    # focus, so the camera stamped the 0xFFFFFFFF "no distance recorded"
-    # sentinel into SubjectDistance. The error must say what happened and
-    # that autofocus is required, not just "0 usable frames".
+    # The real-world failure from a contributor: every frame stamped with the
+    # 0xFFFFFFFF "no distance recorded" sentinel in SubjectDistance (cause
+    # not fully pinned down; MF on current firmware records fine). The error
+    # must say what happened and prescribe the known-good procedure
+    # (autofocus, moving between frames), not just "0 usable frames".
     src = tmp_path / "ladder"
     src.mkdir()
     for i, (m, f, _) in enumerate(LADDER):
