@@ -237,6 +237,22 @@ python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V-Ladder --contribut
 4. The tool prints residuals, meaning how far off the fitted curve is from each of your measured points, as a percentage. Under 2% means your ladder shots were consistent enough to trust; higher than that usually means a step in the ladder was off (wrong distance, wrong lens selected, that kind of thing), and it's worth reshooting.
 5. Share it with the project: no GitHub account? Email the file to hasselblad@agentmail.to instead. Otherwise, open a GitHub issue with the resulting calibration file's contents pasted in, or open a pull request adding it under `calibration/<lens-name>.json` (for example, a 90V calibration would be `calibration/xcd-90v.json`, following the same naming pattern as the shipped `calibration/xcd-55v.json`). See `CONTRIBUTING.md` for the exact steps.
 
+### Calibrating with measured distances
+
+The ladder above can only reach as far as the camera writes a real distance, about 3 m. To go further you need distances you measured yourself, for example with a laser measure, taken from the focal plane mark (the Φ symbol on the body). Shoot two or three autofocus frames per mark, re-locking focus on something else before each one, and sort them into one subfolder per mark, named by the exact reading:
+
+```
+55V/1.000m/   55V/2.000m/   55V/9.987m/   55V/20.000m/
+```
+
+Then run:
+
+```
+python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V --measured --contributor "Your Name"
+```
+
+The folder name is the true distance, so it doesn't matter that the camera writes Infinity past a few metres. Each mark becomes one point. Besides the residuals, the tool prints an overlap table: for every mark it shows your measurement, the camera's own value where it wrote one, and what the shipped calibration predicts. On the near marks those three should agree; if they don't, the reference point is off and the far points shouldn't be trusted. The result goes to `<lens>-measured.json` and covers only the distances you measured, so don't copy it over a shipped calibration. Send it in and it will be merged with the near-range points.
+
 
 ## FAQ
 
