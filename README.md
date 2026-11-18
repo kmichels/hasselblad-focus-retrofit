@@ -54,6 +54,10 @@ Read this part before pointing the tool at originals you care about.
 - **Each write is checked.** Before writing, the tool reads the 8 bytes again and stops on that file if they are not what it saw a moment ago, or if the file size changed. After writing, it flushes to disk, reads the bytes back and checks the size again. If any check fails it puts the old bytes back where it can and reports an error for that file; the other files continue.
 - **Files that are read-only are reported as errors, not forced.** The tool does not change permissions on your originals.
 
+### What it does not do
+
+The whole tool is one readable file, `hb-focus-retrofit.py`, and the source is open for anyone to check. It has no networking code at all: search the file for the words `urllib`, `socket`, and `requests` and you won't find any of them. Nothing about your files or your usage is collected or sent anywhere. [PRIVACY.md](PRIVACY.md) spells out exactly what this project does and does not receive.
+
 ### Undoing it
 
 ```
@@ -117,7 +121,7 @@ The rest of this guide is written for a Mac, since that's the most common setup 
 
 ### Checking you have Python (Mac)
 
-Terminal is just a window where you type instructions instead of clicking buttons. Typing the commands in this guide cannot break your Mac, at worst a command does nothing or prints an error you can read and undo.
+Terminal is just a window where you type instructions instead of clicking buttons. Typing a command here cannot break your Mac. The main command does edit your files, so read "What changes in your files" above before you run it for real; `--dry-run` shows what it would do without changing anything.
 
 1. Open **Terminal**. You'll find it in `Applications > Utilities > Terminal`.
 2. Type this and press Return:
@@ -181,7 +185,7 @@ If either command says something like "no such file or directory," you're not in
 
 ## Warning: converters, extension tubes, and zooms fool this tool
 
-If you shoot a lens through the X Converter 1.7, any teleconverter or extension tube, or either of the XCD E-series zooms (XCD 20-35E, XCD 35-100E), keep those frames out of the folder you give the tool. These are warnings about a wrong result, not a missing one, and they share the same root cause: something that changes the optics isn't captured by the calibration key. The calibration only looks at the lens name in the file (`LensModel`), and that name doesn't change when a converter is attached or when a zoom moves off the focal length it was calibrated at.
+If you shoot a lens through the X Converter 1.7, any teleconverter or extension tube, or either of the XCD E-series zooms (XCD 20-35E, XCD 35-100E), keep those frames out of the folder you give the tool. Zooms are skipped, but converters and extension tubes are not: the tool writes a wrong result for those. Both come from the same root cause: something that changes the optics isn't captured by the calibration key. The calibration only looks at the lens name in the file (`LensModel`), and that name doesn't change when a converter is attached or when a zoom moves off the focal length it was calibrated at.
 
 **Converters and extension tubes.** The camera writes the same lens name to the file whether the converter is attached or not. The shipped `calibration/xcd-135.json` was measured on the bare XCD 135 only. A frame shot with the XCD 135 plus the X Converter 1.7 reports the same "XCD 135" lens name, but the effective focal length is roughly 203 to 221 mm instead of the bare lens's 127 to 132 mm. Nothing in the file tells the tool which one it's looking at, so it applies the bare-lens calibration to the converter frame anyway and writes a distance that is wrong, not skipped. In folder mode that number goes into the file in place, replacing whatever the camera wrote. Lightroom and Capture One will then apply distance-dependent lens corrections using that wrong number.
 

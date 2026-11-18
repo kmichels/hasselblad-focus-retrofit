@@ -430,3 +430,19 @@ def test_mixed_folder_summary(tool, tmp_path, capsys):
     assert c["skipped, no calibration"] == 1
     assert c["unchanged"] == 0 and c["errors"] == 0
     assert "run_id" in out and "undo log:" in out
+
+
+def test_errors_print_one_line_not_a_traceback(tool, tmp_path, capsys):
+    shoot = make_shoot(tmp_path)
+    (shoot / "junk.3FR").write_bytes(b"NOPE" + b"\x00" * 100)
+    ro = build_3fr(shoot / "ro.3FR", subject_distance=INF, maker_f=KNOT_F, maker_m=KNOT_M)
+    os.chmod(ro, 0o444)
+    try:
+        rc = tool.main([str(shoot)])
+        cap = capsys.readouterr()
+        assert rc == 1
+        assert "Traceback" not in cap.err and "Traceback" not in cap.out
+        if not os.access(ro, os.W_OK):
+            assert "permission denied" in cap.out and "nothing changed" in cap.out
+    finally:
+        os.chmod(ro, 0o644)

@@ -948,6 +948,11 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
                         continue
                     tally["copied"] += 1
                     emit(f"{rel}  copied with tag added: {d:.3f} m  ({lens}) -> {OUTPUT_DIR}/")
+        except PermissionError as exc:
+            logger.exception("run %s: not writable: %s", run_id, p)
+            tally["error"] += 1
+            emit(f"{rel}  ERROR: permission denied ({exc.strerror}); file is read-only "
+                 f"or not accessible, nothing changed")
         except (ParseError, VerifyError, OSError) as exc:
             logger.exception("run %s: failed on %s", run_id, p)
             tally["error"] += 1
@@ -958,7 +963,9 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
 
 def cmd_run(args):
     run_id = str(uuid.uuid4())
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
+    # Per-file problems are already printed as ERROR lines; the logger carries
+    # the tracebacks and state, shown only with -v.
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.CRITICAL,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     folder = pathlib.Path(args.folder).expanduser().resolve()
     if not folder.is_dir():
@@ -967,8 +974,8 @@ def cmd_run(args):
         return 2
     cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
     if not cals:
-        logger.warning("no lens calibrations loaded; keep the calibration folder next "
-                       "to this script, or every file will be skipped")
+        print("warning: no lens calibrations loaded; keep the calibration folder next "
+              "to this script, or every file will be skipped", file=sys.stderr)
     logger.info("run %s: folder=%s dry_run=%s", run_id, folder, args.dry_run)
     undo_log = UndoLog(folder, run_id)
     try:
@@ -1028,7 +1035,7 @@ def _undo_one(entry):
 
 def cmd_undo(args):
     run_id = str(uuid.uuid4())
-    logging.basicConfig(level=logging.WARNING,
+    logging.basicConfig(level=logging.CRITICAL,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = pathlib.Path(args.logfile).expanduser()
     try:
