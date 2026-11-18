@@ -226,7 +226,8 @@ def classify(info):
 
 
 class Calibration:
-    def __init__(self, lens_model, points):
+    def __init__(self, lens_model, points, f_range=None):
+        self.f_range = f_range  # (min, max) focal length of the calibration points
         # points: list of (m, ratio) sorted by m ascending;
         # ratio = camera_distance / thin_lens_m(f, m) at that knot
         self.lens_model = lens_model
@@ -257,7 +258,8 @@ class Calibration:
         for (m0, _), (m1, _) in zip(pts, pts[1:]):
             if m0 == m1:
                 raise ValueError(f"duplicate m value {m0!r} in calibration points")
-        return cls(doc["lens_model"], pts)
+        fs = [p["f"] for p in doc["points"]]
+        return cls(doc["lens_model"], pts, (min(fs), max(fs)))
 
     @property
     def m_min(self):
@@ -708,6 +710,9 @@ def cmd_inspect(args):
 # ---------------------------------------------------------------------------
 
 OUTPUT_DIR = "retrofitted"
+# A frame whose maker-note focal length is more than this fraction outside the
+# calibration points' focal-length range is not the bare lens (converter).
+F_TOLERANCE = 0.10
 SENTINEL_NUM = 0xFFFFFFFF
 UNDO_PREFIX = "hb-focus-retrofit-undo-"
 
@@ -851,6 +856,10 @@ def maker_note_distance(info, cals):
     cal = cals.get(info.lens_model or "")
     if cal is None:
         return "no-cal", f"no calibration for {info.lens_model}", None
+    if cal.f_range and not (cal.f_range[0] * (1 - F_TOLERANCE) <= f
+                            <= cal.f_range[1] * (1 + F_TOLERANCE)):
+        return "focal", (f"maker focal {f:g} mm outside the calibrated "
+                         f"{cal.f_range[0]:g}-{cal.f_range[1]:g} mm (converter?)"), None
     if not cal.in_range(m):
         return "range", (f"magnification {m:g} outside calibrated range "
                          f"{cal.m_min:g}-{cal.m_max:g}"), None
@@ -890,6 +899,8 @@ SUMMARY_ROWS = [
     ("exists", "output already exists", "output already exists"),
     ("no-focus", "skipped, no focus data", "skipped, no focus data"),
     ("no-cal", "skipped, no calibration", "skipped, no calibration"),
+    ("focal", "skipped, focal length outside calibration (converter?)",
+     "skipped, focal length outside calibration (converter?)"),
     ("range", "skipped, outside calibrated range", "skipped, outside calibrated range"),
     ("symlink", "skipped, symlink", "skipped, symlink"),
     ("error", "errors", "errors"),
@@ -988,11 +999,12 @@ def cmd_run(args):
         print(f"no 3FR files found under {folder}")
         return 0
     idx = 2 if args.dry_run else 1
+    W = max(len(r[1]) for r in SUMMARY_ROWS) + 3
     print()
     print("DRY RUN: nothing was written" if args.dry_run else "Summary")
-    print(f"  {'files found:':<36}{found}")
+    print(f"  {'files found:':<{W}}{found}")
     for key, *labels in SUMMARY_ROWS:
-        print(f"  {labels[idx - 1] + ':':<36}{tally.get(key, 0)}")
+        print(f"  {labels[idx - 1] + ':':<{W}}{tally.get(key, 0)}")
     if undo_log.path:
         print(f"undo log: {undo_log.path}")
         print(f"to reverse the in-place changes: python3 hb-focus-retrofit.py undo "

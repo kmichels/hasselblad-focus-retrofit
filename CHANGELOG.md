@@ -8,7 +8,7 @@
 - Every in-place change is recorded in `hb-focus-retrofit-undo-<UTC time>-<run id>.jsonl` in the folder you passed, and the line is flushed to disk before the file is touched.
 - New `undo <logfile>` command restores the old bytes, only where the file still holds the logged new bytes and has the logged size. It is safe to run twice.
 - Files with no tag (before firmware 1.3.16.1) still get a copy, now under `<folder>/retrofitted/` keeping the subfolder layout. Existing copies are never overwritten.
-- Skipped files are reported with their reason and counted separately: no focus data, no calibration for the lens, outside the calibrated range (including far focus), symlink.
+- Skipped files are reported with their reason and counted separately: no focus data, no calibration for the lens, focal length outside the calibration by more than 10 percent (converter), outside the calibrated range (including far focus), symlink.
 - The `retrofit`, `calibrate` and `inspect` commands behave as before.
 
 ## 0.1.0

@@ -446,3 +446,28 @@ def test_errors_print_one_line_not_a_traceback(tool, tmp_path, capsys):
             assert "permission denied" in cap.out and "nothing changed" in cap.out
     finally:
         os.chmod(ro, 0o644)
+
+
+def test_converter_frame_is_skipped_by_focal_length_guard(tool, tmp_path, capsys):
+    shoot = make_shoot(tmp_path)
+    kw = dict(subject_distance=INF, maker_m=KNOT_M)
+    # about 1.6x the 55V's calibrated focal length (49.6 to 55.7 mm)
+    conv = build_3fr(shoot / "conv.3FR", maker_f=KNOT_F * 1.6, focal_length=(88, 1), **kw)
+    # inside the 10% tolerance either side of the calibrated range: still processed
+    edge = build_3fr(shoot / "edge.3FR", maker_f=47.0, **kw)
+    build_3fr(shoot / "ok.3FR", maker_f=KNOT_F, **kw)
+    before = conv.read_bytes()
+    assert tool.main([str(shoot)]) == 0
+    out = capsys.readouterr().out
+    c = counts(out)
+    assert c["skipped, focal length outside calibration (converter?)"] == 1
+    assert c["rewritten in place"] == 2
+    assert conv.read_bytes() == before
+    assert "converter?" in out
+
+
+def test_converter_frame_without_tag_is_not_copied(tool, tmp_path, capsys):
+    shoot = make_shoot(tmp_path)
+    build_3fr(shoot / "conv.3FR", maker_f=KNOT_F * 1.6, focal_length=(88, 1), maker_m=KNOT_M)
+    assert tool.main([str(shoot)]) == 0
+    assert not (shoot / "retrofitted").exists()
