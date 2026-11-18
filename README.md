@@ -1,18 +1,101 @@
 # Hasselblad Focus Distance Retrofit
 
-Your Hasselblad X2D II RAW files from before firmware 1.3.16.1 contain everything needed to know the focus distance, but Lightroom and Capture One can't see it. This tool fixes that, without touching your originals.
+Lightroom and Capture One use the EXIF focus distance (SubjectDistance) to decide how much distance-dependent lens correction to apply. Hasselblad X2D II files get that value wrong in three ways: files shot before firmware 1.3.16.1 have no value at all, and files shot on later firmware can carry the distance in feet instead of metres (the field is defined in metres), the "Infinity" placeholder at close focus, or a stale value from an earlier frame.
 
-In practice, this means: Lightroom and Capture One apply lens corrections (distortion, vignetting, that kind of thing) based on how far away the camera thinks it was focused. Without a focus distance, they assume you were focused far away, which is wrong on close-up shots and makes the correction visibly off. Once a file has been through this tool, the correction is tuned for the actual focus distance, and close-up shots correct properly. The before/after pair below shows the difference.
+Every X2D II file also records the lens's focal length and magnification in the maker note, and those are not affected by any of that. This tool works the distance out from them, using a per-lens calibration, and writes it into the file.
 
-Whether a file qualifies depends on the firmware it was shot with, not on what firmware your camera runs today. In plain terms: files shot on firmware 1.2.7.11 through anything just before 1.3.16.1 are the ones this tool helps, since those write the raw data but not the finished distance tag. Files older than 1.2.7.11 don't have the data at all and get skipped. Files on 1.3.16.1 or newer already have the tag written by the camera itself and also get skipped, there's nothing for the tool to add.
+## Use it
 
-If you've updated firmware partway through owning the camera, your archive can span all three of those cases, and each file is judged on its own. You don't need to remember or look up what firmware you were running when: point the tool at your files and it sorts this out per file. If you want to check a single file yourself first, the `inspect` command prints exactly what firmware it was shot with:
+One command, no options to learn:
 
 ```
-python3 hb-focus-retrofit.py inspect B0001234.3FR
+python3 hb-focus-retrofit.py ~/Pictures/X2D-Import
 ```
+
+Replace the path with your folder. The tool goes through every `.3FR` file in it, including subfolders, and for each one it computes the distance from the maker note. Then:
+
+- **File already has a SubjectDistance tag** (firmware 1.3.16.1 and later): the tag is corrected in place, whatever it held before (feet, Infinity, a stale value, or a value that was already about right). Only those 8 bytes change.
+- **File has no tag** (older firmware): the tag cannot be added without restructuring the file, so the tool writes a copy under `retrofitted/` inside your folder, keeping your subfolder layout. The original is never opened for writing.
+- **Distance cannot be computed**: the file is left alone and the report says why (see "Why was my file skipped?").
+
+Run it a second time and nothing changes, because every file already carries the value the tool would write. To see what it would do first, add `--dry-run`:
+
+```
+python3 hb-focus-retrofit.py ~/Pictures/X2D-Import --dry-run
+```
+
+You get one line per file and a count at the end:
+
+```
+B0001201.3FR           rewritten: stored Infinity -> 1.629 m  (XCD 55V)
+B0001202.3FR           rewritten: stored 1.730 -> 0.526 m  (XCD 55V)
+day2/B0001203.3FR      unchanged (1.820 m, XCD 55V)
+old/B0001204.3FR       copied with tag added: 0.637 m  (XCD 55V) -> retrofitted/
+old/B0001205.3FR       skipped: no calibration for XCD 38V
+
+Summary
+  files found:                        5
+  rewritten in place:                 2
+  unchanged:                          1
+  copied with tag added:              1
+  ...
+undo log: /Users/you/Pictures/X2D-Import/hb-focus-retrofit-undo-20261118T162323Z-<id>.jsonl
+```
+
+The exit code is 0 when no file had an error and 1 when any did. Skipped files are not errors.
+
+## What changes in your files
+
+Read this part before pointing the tool at originals you care about.
+
+- **In-place edits modify your original files.** For a file that already has the tag, the tool overwrites the 8 bytes that hold SubjectDistance. Nothing else in the file changes. I checked this on 16 real files from firmware 1.4.15.7: comparing each file with its original showed differences only inside that 8-byte field (4 to 6 bytes actually differed), and the file size was identical.
+- **The file's checksum and modification time change.** The tool does not put the old modification time back, so backup tools, sync tools and Lightroom's "changed on disk" check will see a changed file. If you keep checksums of your originals, those are now out of date for the files that were rewritten.
+- **Every in-place change is recorded in an undo log before the file is touched.** The log is a text file named `hb-focus-retrofit-undo-<date>-<run id>.jsonl`, written into the folder you passed. It holds the file path, the old 8 bytes and the new 8 bytes. A run that changes nothing writes no log.
+- **Each write is checked.** Before writing, the tool reads the 8 bytes again and stops on that file if they are not what it saw a moment ago, or if the file size changed. After writing, it flushes to disk, reads the bytes back and checks the size again. If any check fails it puts the old bytes back where it can and reports an error for that file; the other files continue.
+- **Files that are read-only are reported as errors, not forced.** The tool does not change permissions on your originals.
+
+### Undoing it
+
+```
+python3 hb-focus-retrofit.py undo "/path/to/hb-focus-retrofit-undo-20261118T162323Z-<id>.jsonl"
+```
+
+For each entry in the log, the old 8 bytes go back, but only if the file still has the new bytes from that run and the same size. If a file was changed again since, or is gone, or has a different size, that entry is skipped and reported, and the file is left as it is. Running `undo` twice is safe: the second time it reports "already restored". Undo restores the bytes, so the file is byte-identical to the original again, but it does not restore the modification time.
+
+The copies under `retrofitted/` are not covered by the log. To undo those, delete the `retrofitted` folder.
+
+### Why was my file skipped?
+
+The report names the reason and the summary counts each one separately.
+
+- **No focus data.** The maker note has no focus fields (firmware before 1.2.7.11), or they are zero, or the focal length is implausible against the file's nominal focal length. There is nothing to compute from.
+- **No calibration for the lens.** The distance depends on a per-lens calibration and this lens does not have one yet. This includes the XCD 20-35E and XCD 35-100E zooms. The tool does not guess with the raw optics formula in this mode.
+- **Outside calibrated range.** The focus position is beyond the magnifications the calibration was measured at. That covers frames focused far away (small magnification), where the camera's own value is also least reliable, and extreme close-ups. The tool never extrapolates, so it leaves these alone rather than write a number it cannot support.
+- **Symlink.** Symbolic links to files are not followed, so the tool never edits a file outside the folder you gave it.
+
+Dot-folders (such as `.sync`) and the tool's own `retrofitted` folder at the top level are not scanned, and hidden files whose names start with a dot (the `._B0001.3FR` files macOS makes on some cards and network drives) are ignored.
+
+### Calibrated lenses
+
+The calibration for each lens comes from ladders shot on X2D II bodies and is keyed on the magnification in the maker note. A file is only processed when its magnification lies inside the range measured for its lens.
+
+| Lens | Calibration points | Magnification range |
+|---|---|---|
+| XCD 25V | 41 | 0.00297 to 0.17161 |
+| XCD 55V | 26 | 0.01803 to 0.15353 |
+| XCD 90V | 23 | 0.02993 to 0.1724 |
+| XCD 120 | 29 | 0.05453 to 0.4992 |
+| XCD 135 | 15 | 0.0364 to 0.17181 |
+
+To add a lens, see "Calibrating your own lens" below.
+
+### Which value gets written
+
+The distance is stored as a standard EXIF rational number: the distance in metres times 1000, over 1000 (so 1.629 m is stored as 1629/1000), in the file's own byte order. The same encoding is used for the in-place edit and for the tag added to older files.
 
 ## Before and after
+
+The images below show a frame from before firmware 1.3.16.1, which has no distance at all, so it goes through the copy path. The same effect applies to a file whose distance was wrong.
 
 **Before**, the file as your archive has it today. Lightroom has no focus distance to work from, so it corrects the lens as though you focused far away:
 
@@ -23,18 +106,6 @@ python3 hb-focus-retrofit.py inspect B0001234.3FR
 ![The same frame after retrofitting, with Lightroom applying the correction for the real focus distance](docs/images/after.jpg)
 
 Both images come from one frame: a Hasselblad X2D II with the XCD 55V, focused at about 0.64 meters, shot on firmware 1.2.7.16 (before the camera recorded focus distance itself). Nothing was changed in Lightroom between the two, and the RAW image data is byte for byte identical. The only difference is the focus distance the file carries.
-
-## Is this safe?
-
-Yes. Three things make this low-risk:
-
-- **Your original files are never modified.** The tool only reads them.
-- **The files with the fix applied, which this guide calls "retrofitted copies," are written as new files**, into a new folder (called `retrofitted` by default, sitting next to your originals). Your originals stay exactly where they were.
-- **The whole tool is one readable file**, `hb-focus-retrofit.py`, and the source is open for anyone to check. If you want to verify for yourself that it never sends anything over the internet, search the file for the words `urllib`, `socket`, and `requests`. You won't find any of them; the tool has no networking code at all.
-
-If you ever want to undo this, just delete the `retrofitted` folder. Your originals were never touched.
-
-Nothing about your files or your usage is collected or sent anywhere. [PRIVACY.md](PRIVACY.md) spells out exactly what this project does and does not receive, including what happens to any file you send in for analysis.
 
 ## What you need
 
@@ -72,7 +143,7 @@ python3 --version
 
 ## Quick start
 
-Five steps: get the code, move into its folder, do a dry run, read the report, then apply for real. Reminder: on Windows, type `python` instead of `python3` in every command below, and use your own folder's real path (a Windows path or the drag-in trick) instead of the Mac-style `~/Desktop/...` examples.
+Reminder: on Windows, type `python` instead of `python3` in every command below, and use your own folder's real path instead of the Mac-style `~/Desktop/...` examples.
 
 **1. Get the code.**
 
@@ -102,70 +173,24 @@ cd hasselblad-focus-retrofit
 
 If either command says something like "no such file or directory," you're not in the right starting location, or the folder has a different name than expected. Type `cd ` (with a trailing space, no Return yet), then drag the folder itself from Finder or File Explorer into the Terminal/PowerShell window. It will fill in the exact path for you. Then press Return.
 
-**3. Copy your files off the memory card, then do a dry run.** Copy your 3FR files from the camera's memory card to a folder on your computer first, for example a folder on your Desktop, the same way you'd normally import a shoot. A dry run only reports what the tool *would* do. It writes nothing. Point `--source` at that folder:
+**3. Make sure the folder is backed up.** The tool edits files in place, so run it on files that exist somewhere else too. Copying the 3FR files off the card into a working folder first is the usual way.
 
-```
-python3 hb-focus-retrofit.py retrofit --source ~/Desktop/X2D-Import
-```
+**4. Preview, then run.** Type `python3 hb-focus-retrofit.py ` (with a trailing space, don't press Return yet), drag your folder from Finder or File Explorer into the window so the real path is filled in, add ` --dry-run`, and press Return. The report shows what would happen and writes nothing. When it looks right, run the same command without `--dry-run`.
 
-**Replace `~/Desktop/X2D-Import` with the actual location of YOUR folder.** It's an example, not a real path on your computer. The easiest way to get the real path right: type `python3 hb-focus-retrofit.py retrofit --source ` (with a trailing space, don't press Return yet), then drag your folder from Finder or File Explorer directly into the Terminal/PowerShell window. It will insert the correct path for you. Then press Return.
-
-**4. Read the report.** You'll get one line per file: which ones will get a focus distance written, which ones are skipped and why, and whether the calibration used is a known lens (calibrated) or the raw formula (UNCALIBRATED, see below). It looks something like this:
-
-```
-IMG_0001.3FR  would write 0.620 m  calibrated (XCD 55V)
-IMG_0002.3FR  would write 1.400 m  UNCALIBRATED (raw formula)
-IMG_0003.3FR  skip-nofields: no maker-note focus fields (firmware before 1.2.7.11?)
-
-DRY RUN (use --apply to write copies): skip-nofields=1, would-write=2
-```
-
-The "(XCD 55V)" part is the tool reading the lens name straight out of each file's own metadata, you never have to tell it which lens you used, and it will correctly pick a different calibration per file if you shot with more than one lens in the same folder.
-
-Nothing gets written at this stage, this is only a preview so you know what to expect before step 5.
-
-**5. Apply for real.** Once the report looks right, add `--apply`. This is the only flag that writes anything:
-
-```
-python3 hb-focus-retrofit.py retrofit --source ~/Desktop/X2D-Import --apply
-```
-
-Again, `~/Desktop/X2D-Import` is a placeholder, use the same real path (or the same drag-in trick) you used in step 3.
-
-Your retrofitted copies land in a `retrofitted` folder inside the source folder you pointed at (so if your source was `~/Desktop/X2D-Import`, the copies show up in `~/Desktop/X2D-Import/retrofitted`). Your originals are untouched. Re-import the retrofitted copies into Lightroom or Capture One and the distance-dependent lens corrections will use the real focus distance instead of guessing "far away."
-
-**It's safe to run this again.** If you run the same command a second time, files already present in the `retrofitted` folder are skipped rather than overwritten or duplicated. And if a run gets interrupted partway (closing the window, losing power, and so on), you won't end up with a half-written file: the tool verifies each copy right after writing it and deletes it automatically if the verification fails, so anything that survives in the `retrofitted` folder is complete and correct. Your originals are only ever read, never written to, at any point.
-
-## What "UNCALIBRATED" means
-
-The camera stores a raw optical measurement (the lens's magnification at the moment of focus) and this tool turns that into a distance using a basic optics formula. That formula is close but not exact, because it assumes an ideal thin lens and real lenses aren't quite that.
-
-We measured how far off the raw formula is for the Hasselblad XCD 55V lens by shooting a distance ladder and comparing against the camera's own reported values on newer firmware:
-
-| Distance | Raw formula error |
-|---|---|
-| 0.44 m | -15% |
-| 0.62 m | -12.5% |
-| 1.10 m | -8.5% |
-| 1.48 m | -5.7% |
-| 2.14 m | +0.2% |
-| 2.91 m | +8.2% |
-
-Close focus is where the error is worst, which is exactly where distance-dependent lens corrections matter most. That's why this tool ships a calibration for the XCD 55V that corrects for this curve. If your lens has a calibration file, you get the corrected value automatically. If it doesn't yet, you still get the raw formula's number, but the report marks it **UNCALIBRATED** so you know it may be off by the amounts in the table above, not exact.
-
-The table above is specific to the XCD 55V. Other lenses are built differently, so the size of the error, and even which direction it leans, is not the same from lens to lens. On the XCD 55V the formula reads low at close focus (about -15%). A single measured frame with the XCD 90V read high instead, +9% at 0.5 m, the opposite direction. That's one data point on one lens, not a full calibration curve, but it's enough to show the error isn't a fixed offset you can just mentally correct for. That's exactly why per-lens calibration exists, see "Calibrating your own lens" below if you'd like to build one for your own lens.
+**5. Re-import.** If Lightroom or Capture One already has these files in a catalog, they need to notice that the metadata changed. I have not tested how either one handles that, so check on one file first: look at the focus distance Lightroom shows for it (Metadata panel) before and after re-reading metadata or re-importing. Files that went to `retrofitted/` are new files and import as new files.
 
 ## Warning: converters, extension tubes, and zooms fool this tool
 
-If you shoot a lens through the X Converter 1.7, any teleconverter or extension tube, or either of the XCD E-series zooms (XCD 20-35E, XCD 35-100E), do not retrofit those frames. These are warnings about a wrong result, not a missing one, and they share the same root cause: something that changes the optics isn't captured by the calibration key. The calibration only looks at the lens name in the file (`LensModel`), and that name doesn't change when a converter is attached or when a zoom moves off the focal length it was calibrated at.
+If you shoot a lens through the X Converter 1.7, any teleconverter or extension tube, or either of the XCD E-series zooms (XCD 20-35E, XCD 35-100E), keep those frames out of the folder you give the tool. These are warnings about a wrong result, not a missing one, and they share the same root cause: something that changes the optics isn't captured by the calibration key. The calibration only looks at the lens name in the file (`LensModel`), and that name doesn't change when a converter is attached or when a zoom moves off the focal length it was calibrated at.
 
-**Converters and extension tubes.** The camera writes the same lens name to the file whether the converter is attached or not. The shipped `calibration/xcd-135.json` was measured on the bare XCD 135 only. A frame shot with the XCD 135 plus the X Converter 1.7 reports the same "XCD 135" lens name, but the effective focal length is roughly 203 to 221 mm instead of the bare lens's 127 to 132 mm. Nothing in the file tells the tool which one it's looking at, so it applies the bare-lens calibration to the converter frame anyway and writes a distance that is wrong, not skipped. Lightroom and Capture One will then apply distance-dependent lens corrections using that wrong number.
+**Converters and extension tubes.** The camera writes the same lens name to the file whether the converter is attached or not. The shipped `calibration/xcd-135.json` was measured on the bare XCD 135 only. A frame shot with the XCD 135 plus the X Converter 1.7 reports the same "XCD 135" lens name, but the effective focal length is roughly 203 to 221 mm instead of the bare lens's 127 to 132 mm. Nothing in the file tells the tool which one it's looking at, so it applies the bare-lens calibration to the converter frame anyway and writes a distance that is wrong, not skipped. In folder mode that number goes into the file in place, replacing whatever the camera wrote. Lightroom and Capture One will then apply distance-dependent lens corrections using that wrong number.
 
-If you shoot the 135 with the 1.7x converter, keep those frames out of the source folder, or delete the retrofitted copies for them afterward. The same caution applies to any lens used with a converter or extension tube where a calibration exists for the bare lens: the tool cannot tell the two apart and will pick the wrong curve.
+If you shoot the 135 with the 1.7x converter, keep those frames out of the folder, or reverse the change for them afterward with `undo`. The same caution applies to any lens used with a converter or extension tube where a calibration exists for the bare lens: the tool cannot tell the two apart and will pick the wrong curve.
 
 Separately, converter frames also make poor material for building your own calibration ladder in the first place. With the converter attached, the camera's own reported focus distance stops tracking somewhere between roughly 1.7 and 3 meters. Five consecutive test frames all reported 1.66 m while the lens was demonstrably focusing further out. If you're building a calibration for a converter setup, expect that range to be unreliable and check your residuals carefully.
 
-**The XCD 20-35E and XCD 35-100E zooms.** Calibration in this tool is a single curve per lens keyed on magnification, and that only holds when focal length is fixed. On a zoom it isn't. At a given magnification, 20 mm and 35 mm are different optical situations that want different corrections, so one curve cannot describe both. A ladder shot at a single focal length would produce a calibration correct at that setting and wrong at every other one, which is worse than no calibration at all, so neither zoom ships with one. Zoom frames still get a real distance from the raw formula and are marked **UNCALIBRATED** in the report, same as any other lens without a curve. A correct fix needs a calibration surface across focal length, not a single curve, and that's future work, not something you can work around by shooting a ladder at one focal length today.
+**The XCD 20-35E and XCD 35-100E zooms.** Calibration in this tool is a single curve per lens keyed on magnification, and that only holds when focal length is fixed. On a zoom it isn't. At a given magnification, 20 mm and 35 mm are different optical situations that want different corrections, so one curve cannot describe both. A ladder shot at a single focal length would produce a calibration correct at that setting and wrong at every other one, which is worse than no calibration at all, so neither zoom ships with one. Zoom frames are skipped with "no calibration", same as any other lens without a curve. A correct fix needs a calibration surface across focal length, not a single curve, and that's future work, not something you can work around by shooting a ladder at one focal length today.
+
 
 ## Calibrating your own lens
 
@@ -186,10 +211,11 @@ python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V-Ladder --contribut
 4. The tool prints residuals, meaning how far off the fitted curve is from each of your measured points, as a percentage. Under 2% means your ladder shots were consistent enough to trust; higher than that usually means a step in the ladder was off (wrong distance, wrong lens selected, that kind of thing), and it's worth reshooting.
 5. Share it with the project: no GitHub account? Email the file to hasselblad@agentmail.to instead. Otherwise, open a GitHub issue with the resulting calibration file's contents pasted in, or open a pull request adding it under `calibration/<lens-name>.json` (for example, a 90V calibration would be `calibration/xcd-90v.json`, following the same naming pattern as the shipped `calibration/xcd-55v.json`). See `CONTRIBUTING.md` for the exact steps.
 
+
 ## FAQ
 
 **Does this change my original files?**
-No. It only reads them. All output goes into copies in a separate folder.
+Yes, for files that already have a SubjectDistance tag: the 8 bytes holding that value are overwritten, and nothing else in the file changes. The checksum and modification time of those files change, and an undo log records the old bytes. Files with no tag (before firmware 1.3.16.1) are never modified; they get a copy in `retrofitted/`. See "What changes in your files" above.
 
 **What about FFF files?**
 Not supported yet, and untested. Stick to 3FR for now.
@@ -198,21 +224,16 @@ Not supported yet, and untested. Stick to 3FR for now.
 Verified on the Hasselblad X2D II (100C sensor). The tool checks for the presence of the right data fields rather than checking the camera model by name, so other Hasselblad bodies with similar maker-note data may work too, but nobody has confirmed that yet. If you try it on another body, please report the result (working or not) via a GitHub issue.
 
 **Does this affect Phocus?**
-No. Phocus calculates its own internal distance handling and doesn't rely on the field this tool writes. Files retrofitted by this tool open in Phocus exactly as before, pixel for pixel.
+Not how it renders. Phocus does not read the field this tool writes, and a test on 2026-08-01 rendered the same file bit-exact in Phocus 4.2.1 before and after a distance was added (see EVIDENCE.md). That test was on a copy with the tag added; I have not separately tested Phocus on a file whose tag was rewritten in place and whose modification time changed.
 
 **Do my Lightroom edits carry over to the retrofitted copies?**
-No. Since the retrofitted copies are new files, Lightroom treats them as new imports with no edit history, they don't automatically inherit any adjustments you made to the originals. If you've already done heavy editing on the originals and don't want to redo it, either copy your Lightroom settings across to the retrofitted copies (Lightroom's "Sync Settings" or "Copy/Paste Settings" work for this), or run this tool before you start editing so you only edit the retrofitted copies from the start.
+Only for the copies in `retrofitted/` (older files with no tag), and not automatically: Lightroom treats a copy as a new import with no edit history. Either copy your Lightroom settings across (Lightroom's "Sync Settings" or "Copy/Paste Settings" work for this), or run this tool before you start editing. Files edited in place keep their name and location. How Lightroom treats an already-catalogued file whose metadata changed on disk has not been tested for this tool, so try one file first.
 
 **What happens if my camera or firmware isn't supported?**
-Files that don't have the data this tool needs are skipped, with the reason printed in the report, they're never guessed at or written to. This is the same behavior whether the reason is old firmware, a different camera body, or anything else the tool doesn't recognize. Nothing bad happens, you just won't get a focus distance for those files.
+Files that don't have the data this tool needs are skipped, with the reason printed in the report, they're never guessed at or written to. This is the same behavior whether the reason is old firmware, a different camera body, or anything else the tool doesn't recognize. You just won't get a corrected focus distance for those files.
 
 **Why was my file skipped?**
-The report tells you the specific reason, but here's what each one means:
-
-- *Already has SubjectDistance* - firmware 1.3.16.1 or later already wrote this, nothing to do.
-- *No maker-note focus fields* - likely a firmware version before 1.2.7.11, which didn't record the fields this tool reads.
-- *Focused at infinity* - there's no finite distance to report.
-- *Value out of range* - the raw numbers look implausible (a sensor glitch or an edge case this tool isn't confident about), so it skips rather than write a guess.
+See "Why was my file skipped?" above: no focus data, no calibration for the lens, outside the calibrated range, or a symlink.
 
 ## Troubleshooting
 
@@ -226,7 +247,32 @@ This is macOS's standard quarantine warning for anything downloaded from the int
 This is Windows' standard warning for files downloaded from the internet, not something specific to this tool. If you see it, click **More info**, then **Run anyway** (or just proceed with unzipping, depending on which step triggered it).
 
 **"no 3FR files found"**
-The `--source` folder you pointed at doesn't contain any `.3FR` files, or you pointed at the wrong folder. Double-check the path, for example by dragging the folder from Finder into Terminal after typing `--source ` to have Terminal fill in the correct path for you.
+The folder you pointed at has no `.3FR` files anywhere under it (the tool looks in subfolders too, but not in folders whose names start with a dot), or you pointed at the wrong folder. Double-check the path, for example by dragging the folder from Finder into Terminal after typing `python3 hb-focus-retrofit.py ` to have Terminal fill in the correct path for you.
+
+**"error: not a folder"**
+The path does not exist or is a file. The tool takes a folder, not a single file. To look at one file, use `python3 hb-focus-retrofit.py inspect FILE.3FR`.
 
 **Terminal says it can't find `hb-focus-retrofit.py`**
 This happens if you closed Terminal/PowerShell and opened a new window later, a new window doesn't remember where you were. You need to move back into the tool's folder first, the same as step 2 in Quick start: type `cd ` (with a trailing space), then drag the tool's folder from Finder or File Explorer into the window, then press Return. After that, the commands work again.
+
+## The older copies-only commands
+
+Before version 0.2.0 the only way to run the tool was the `retrofit` command, and it still works unchanged: it never touches your originals, writes copies into a `retrofitted` folder (or `--dest`), skips files that already have a tag, does not look in subfolders, needs `--apply` to write anything, and for a lens with no calibration it falls back to the raw thin-lens formula and marks the line UNCALIBRATED.
+
+```
+python3 hb-focus-retrofit.py retrofit --source ~/Desktop/X2D-Import
+python3 hb-focus-retrofit.py retrofit --source ~/Desktop/X2D-Import --apply
+```
+
+The raw formula assumes an ideal thin lens, and real lenses are not. This is how far off it is for the XCD 55V, measured against the camera's own values on newer firmware:
+
+| Distance | Raw formula error |
+|---|---|
+| 0.44 m | -15% |
+| 0.62 m | -12.5% |
+| 1.10 m | -8.5% |
+| 1.48 m | -5.7% |
+| 2.14 m | +0.2% |
+| 2.91 m | +8.2% |
+
+Other lenses lean differently (a single XCD 90V frame read +9% high at 0.5 m), which is why the folder mode skips lenses without a calibration instead of using the raw formula.
