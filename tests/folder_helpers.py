@@ -1,6 +1,5 @@
 """Shared helpers for the folder-mode tests."""
 import re
-import struct
 from pathlib import Path
 
 INF = (0xFFFFFFFF, 1)           # the camera's "Infinity" SubjectDistance

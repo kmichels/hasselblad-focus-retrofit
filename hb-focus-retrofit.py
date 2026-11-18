@@ -842,7 +842,7 @@ def _restore_bytes(fh, off, old):
 
 def maker_note_distance(info, cals):
     """(status, detail, distance_m). status is 'ok' or a skip key:
-    'no-focus', 'no-cal', 'range'. Same calibration lookup and formula as the
+    'no-focus', 'no-cal', 'focal', 'range'. Same calibration lookup and formula as the
     retrofit path, but never extrapolates: outside the calibrated magnification
     range the file is skipped, not clamped."""
     f, m = info.maker_f, info.maker_m
@@ -977,7 +977,7 @@ def cmd_run(args):
     # Per-file problems are already printed as ERROR lines; the logger carries
     # the tracebacks and state, shown only with -v.
     logging.basicConfig(level=logging.INFO if args.verbose else logging.CRITICAL,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
     folder = pathlib.Path(args.folder).expanduser().resolve()
     if not folder.is_dir():
         print(f"error: not a folder: {args.folder} (if you meant a command, "
@@ -1048,7 +1048,7 @@ def _undo_one(entry):
 def cmd_undo(args):
     run_id = str(uuid.uuid4())
     logging.basicConfig(level=logging.CRITICAL,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
     log = pathlib.Path(args.logfile).expanduser()
     try:
         lines = log.read_text(encoding="utf-8").splitlines()

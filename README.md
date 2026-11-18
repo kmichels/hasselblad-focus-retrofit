@@ -250,7 +250,7 @@ Not supported yet, and untested. Stick to 3FR for now.
 Verified on the Hasselblad X2D II (100C sensor). The tool checks for the presence of the right data fields rather than checking the camera model by name, so other Hasselblad bodies with similar maker-note data may work too, but nobody has confirmed that yet. If you try it on another body, please report the result (working or not) via a GitHub issue.
 
 **Does this affect Phocus?**
-Not how it renders. Phocus does not read the field this tool writes, and a test on 2026-08-01 rendered the same file bit-exact in Phocus 4.2.1 before and after a distance was added (see EVIDENCE.md). That test was on a copy with the tag added; I have not separately tested Phocus on a file whose tag was rewritten in place and whose modification time changed.
+It does not change how Phocus renders the file. Phocus does not read the field this tool writes, and a test on 2026-08-01 rendered the same file bit-exact in Phocus 4.2.1 before and after a distance was added (see EVIDENCE.md). That test was on a copy with the tag added; I have not separately tested Phocus on a file whose tag was rewritten in place and whose modification time changed.
 
 **Do my Lightroom edits carry over to the retrofitted copies?**
 Only for the copies in `retrofitted/` (older files with no tag), and not automatically: Lightroom treats a copy as a new import with no edit history. Either copy your Lightroom settings across (Lightroom's "Sync Settings" or "Copy/Paste Settings" work for this), or run this tool before you start editing. Files edited in place keep their name and location. How Lightroom treats an already-catalogued file whose metadata changed on disk has not been tested for this tool, so try one file first.
