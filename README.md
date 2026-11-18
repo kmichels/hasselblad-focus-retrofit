@@ -44,6 +44,27 @@ undo log: /Users/you/Pictures/X2D-Import/hb-focus-retrofit-undo-20261118T162323Z
 
 The exit code is 0 when no file had an error and 1 when any did. Skipped files are not errors.
 
+## Current limitations
+
+Read these before you run it on a whole archive.
+
+- **Far focus is not covered yet.** Each lens is only calibrated out to a few metres, because the reference distances so far came from the camera's own value, which it only records reliably at close range. Frames focused beyond that are skipped and keep whatever the camera wrote, including a feet value or Infinity. If you mostly shoot landscapes, expect much of your archive to be skipped. Calibration ladders with laser-measured distances out to about 20 m are planned and will extend the range.
+
+  | Lens | Calibrated from | to about |
+  |---|---|---|
+  | XCD 25V | 0.24 m | 2.1 m |
+  | XCD 55V | 0.43 m | 2.9 m |
+  | XCD 90V | 0.65 m | 3.1 m |
+  | XCD 120 | 0.40 m | 2.3 m |
+  | XCD 135 | 0.95 m | 3.8 m |
+
+- **Five lenses only.** Every other lens is skipped, including both E-series zooms. You can calibrate your own lens and contribute it (see "Calibrating your own lens").
+- **One photographer's equipment.** All five calibrations come from one person's X2D II and one copy of each lens, on firmware 1.3.16.1 and 1.3.16.2. Copy-to-copy variation between lenses has not been measured.
+- **Converters and extension tubes.** Frames shot through a converter are detected by focal length and skipped. Extension tubes cannot be detected, so keep tube frames out of the folder or undo them afterwards.
+- **Files that were already right get rewritten too.** The camera rounds to centimetres and the tool writes millimetres, so most tagged files change by a few millimetres and get a new checksum and modification time, even when the camera's value was correct.
+- **Catalogs are untested.** How Lightroom Classic, Capture One and Phocus react when a file they already have in a catalog is edited in place has not been tested.
+- **Not tested on Windows.** The test suite runs on macOS and Linux. The tool is written to work on Windows, but nobody has run it on a Windows PC yet.
+
 ## What changes in your files
 
 Read this part before pointing the tool at originals you care about.
