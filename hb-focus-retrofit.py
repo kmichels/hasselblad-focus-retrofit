@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Write focus distance into Hasselblad X2D II 3FR files so Lightroom and
-Capture One can apply distance-aware lens corrections to older captures.
+"""Write the correct focus distance into Hasselblad X2D II 3FR files so
+Lightroom and Capture One can apply distance-aware lens corrections.
+
+    python3 hb-focus-retrofit.py <folder>
+
+computes the distance from each file's maker note and the lens calibration and
+makes EXIF SubjectDistance match. Files that already carry the tag are edited
+in place (8 bytes) with an undo log; files without the tag (before firmware
+1.3.16.1) get a copy under <folder>/retrofitted/. `undo <logfile>` reverses
+the in-place edits.
 
 Project: https://github.com/kmichels/hasselblad-focus-retrofit  (MIT)
 """
 import argparse
+import collections
 import dataclasses
 import datetime
 import json
@@ -15,11 +24,12 @@ import shutil
 import stat
 import struct
 import sys
+import uuid
 from typing import List, Optional
 
 logger = logging.getLogger("hb-focus-retrofit")
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 class ParseError(Exception):
@@ -41,6 +51,15 @@ class FileInfo:
     exif_ifd_off: int
     exif_entries: List[bytes]
     exif_next_ifd: bytes
+    # SubjectDistance (0x9206) as stored: where its 8 RATIONAL bytes live, the
+    # raw bytes, and the file size at parse time. None when the tag is absent
+    # (or not a RATIONAL x1, in which case sd_problem says why).
+    sd_offset: Optional[int] = None
+    sd_raw: Optional[bytes] = None
+    sd_num: Optional[int] = None
+    sd_den: Optional[int] = None
+    sd_problem: Optional[str] = None
+    size: int = 0
 
 
 TYPE_SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8, 11: 4, 12: 8}
@@ -128,8 +147,21 @@ def parse_file(path):
             except ParseError:
                 pass  # unreadable maker note = fields absent, not fatal
 
+        sd_offset = sd_raw = sd_num = sd_den = sd_problem = None
+        if 0x9206 in exif:
+            _tag, sd_typ, sd_cnt = struct.unpack(e + "HHI", exif[0x9206][:8])
+            if sd_typ == 5 and sd_cnt == 1:
+                sd_offset = struct.unpack(e + "I", exif[0x9206][8:12])[0]
+                sd_raw = read_at(sd_offset, 8)
+                sd_num, sd_den = struct.unpack(e + "II", sd_raw)
+            else:
+                sd_problem = (f"SubjectDistance has unexpected type {sd_typ} count "
+                              f"{sd_cnt} (expected RATIONAL x1)")
+
         return FileInfo(
             path=path, byte_order=head[:2].decode(),
+            sd_offset=sd_offset, sd_raw=sd_raw, sd_num=sd_num, sd_den=sd_den,
+            sd_problem=sd_problem, size=size,
             model=value(ifd0[0x0110]) if 0x0110 in ifd0 else None,
             software=value(ifd0[0x0131]) if 0x0131 in ifd0 else None,
             lens_model=value(exif[0xA434]) if 0xA434 in exif else None,
@@ -194,7 +226,8 @@ def classify(info):
 
 
 class Calibration:
-    def __init__(self, lens_model, points):
+    def __init__(self, lens_model, points, f_range=None):
+        self.f_range = f_range  # (min, max) focal length of the calibration points
         # points: list of (m, ratio) sorted by m ascending;
         # ratio = camera_distance / thin_lens_m(f, m) at that knot
         self.lens_model = lens_model
@@ -225,7 +258,19 @@ class Calibration:
         for (m0, _), (m1, _) in zip(pts, pts[1:]):
             if m0 == m1:
                 raise ValueError(f"duplicate m value {m0!r} in calibration points")
-        return cls(doc["lens_model"], pts)
+        fs = [p["f"] for p in doc["points"]]
+        return cls(doc["lens_model"], pts, (min(fs), max(fs)))
+
+    @property
+    def m_min(self):
+        return self.points[0][0]
+
+    @property
+    def m_max(self):
+        return self.points[-1][0]
+
+    def in_range(self, m):
+        return self.m_min <= m <= self.m_max
 
     def ratio(self, m):
         pts = self.points
@@ -656,10 +701,393 @@ def cmd_inspect(args):
     return 1 if failures else 0
 
 
+# ---------------------------------------------------------------------------
+# Folder mode: the maker note always wins.
+#
+# Files that already carry SubjectDistance are edited in place (the 8-byte
+# RATIONAL only, undo log written first). Files without the tag get a copy,
+# because adding the tag restructures the file.
+# ---------------------------------------------------------------------------
+
+OUTPUT_DIR = "retrofitted"
+# A frame whose maker-note focal length is more than this fraction outside the
+# calibration points' focal-length range is not the bare lens (converter).
+F_TOLERANCE = 0.10
+SENTINEL_NUM = 0xFFFFFFFF
+UNDO_PREFIX = "hb-focus-retrofit-undo-"
+
+
+class VerifyError(Exception):
+    """A safety check failed around an in-place write."""
+
+
+def _utc_now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _read_at(fh, off, n):
+    fh.seek(off)
+    data = fh.read(n)
+    if len(data) != n:
+        raise VerifyError(f"short read of {n} bytes at {off:#x}")
+    return data
+
+
+def _numerator(name, dist_m):
+    """uint32 RATIONAL numerator (denominator 1000) for dist_m, or ParseError."""
+    num = round(dist_m * 1000) if dist_m > 0 else 0
+    if num < 1 or num > 0xFFFFFFFF:
+        raise ParseError(f"{name}: distance {dist_m!r} m is out of range for a "
+                         f"SubjectDistance RATIONAL")
+    return num
+
+
+class UndoLog:
+    """Append-only JSON-lines undo log. The file is created on the first
+    append, so a run that changes nothing leaves no log behind."""
+
+    def __init__(self, folder, run_id):
+        self.folder = pathlib.Path(folder)
+        self.run_id = run_id
+        stamp = _utc_now().strftime("%Y%m%dT%H%M%SZ")
+        self._target = self.folder / f"{UNDO_PREFIX}{stamp}-{run_id}.jsonl"
+        self.path = None
+        self._fh = None
+
+    def append(self, entry):
+        if self._fh is None:
+            fd = os.open(self._target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o644)
+            self._fh = os.fdopen(fd, "a", encoding="utf-8")
+            self.path = self._target
+            _fsync_dir(self.folder)
+        self._fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        self._fh.flush()
+        os.fsync(self._fh.fileno())
+
+    def close(self):
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
+
+
+def _fsync_dir(folder):
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        logger.debug("could not fsync directory %s", folder)
+    finally:
+        os.close(fd)
+
+
+def write_subject_distance_inplace(path, info, dist_m, undo_log):
+    """Overwrite the existing 8-byte SubjectDistance RATIONAL with
+    round(d*1000)/1000. Order: verify the bytes are still what the parser saw,
+    make the undo line durable, write, fsync, verify, restore on failure."""
+    name = info.path.name
+    if info.sd_offset is None:
+        raise ParseError(f"{name}: no SubjectDistance to overwrite")
+    num = _numerator(name, dist_m)
+    e = "<" if info.byte_order == "II" else ">"
+    new = struct.pack(e + "II", num, 1000)
+    old, off = info.sd_raw, info.sd_offset
+    with open(path, "r+b") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        if size != info.size or _read_at(fh, off, 8) != old:
+            raise VerifyError(f"{name}: file changed since it was read; nothing written")
+        undo_log.append({
+            "run_id": undo_log.run_id,
+            "timestamp": _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "path": str(pathlib.Path(path).resolve()),
+            "size": size, "offset": off,
+            "old_hex": old.hex(), "new_hex": new.hex(),
+            "old_value": (info.sd_num / info.sd_den) if info.sd_den else None,
+            "new_value": num / 1000,
+            "lens": info.lens_model,
+        })
+        fh.seek(off)
+        fh.write(new)
+        fh.flush()
+        os.fsync(fh.fileno())
+        got = _read_at(fh, off, 8)
+        size_after = os.fstat(fh.fileno()).st_size
+        if got != new or size_after != size:
+            logger.error("verification failed for %s: offset=%d wrote=%s read=%s "
+                         "size=%d->%d", path, off, new.hex(), got.hex(), size, size_after)
+            restored = _restore_bytes(fh, off, old)
+            raise VerifyError(
+                f"{name}: verification failed after write (read back {got.hex()}, "
+                f"size {size} -> {size_after}); old bytes "
+                + ("restored" if restored else "COULD NOT BE RESTORED, see the undo log"))
+    check = parse_file(path)
+    if (check.sd_num, check.sd_den) != (num, 1000):
+        raise VerifyError(f"{name}: re-parse after write read back "
+                          f"{check.sd_num}/{check.sd_den}, expected {num}/1000; see the undo log")
+
+
+def _restore_bytes(fh, off, old):
+    try:
+        fh.seek(off)
+        fh.write(old)
+        fh.flush()
+        os.fsync(fh.fileno())
+        return _read_at(fh, off, 8) == old
+    except (OSError, VerifyError):
+        logger.exception("could not restore old bytes at offset %d", off)
+        return False
+
+
+def maker_note_distance(info, cals):
+    """(status, detail, distance_m). status is 'ok' or a skip key:
+    'no-focus', 'no-cal', 'focal', 'range'. Same calibration lookup and formula as the
+    retrofit path, but never extrapolates: outside the calibrated magnification
+    range the file is skipped, not clamped."""
+    f, m = info.maker_f, info.maker_m
+    if f is None or m is None:
+        return "no-focus", "no maker-note focus fields", None
+    if f <= 0 or m <= 0:
+        return "no-focus", f"maker-note focus fields are zero (f={f:g}, m={m:g})", None
+    if info.focal_length is not None and not (0.3 * info.focal_length <= f <= 3.0 * info.focal_length):
+        return "no-focus", (f"maker focal {f:g} mm implausible vs nominal "
+                            f"{info.focal_length:g} mm"), None
+    cal = cals.get(info.lens_model or "")
+    if cal is None:
+        return "no-cal", f"no calibration for {info.lens_model}", None
+    if cal.f_range and not (cal.f_range[0] * (1 - F_TOLERANCE) <= f
+                            <= cal.f_range[1] * (1 + F_TOLERANCE)):
+        return "focal", (f"maker focal {f:g} mm outside the calibrated "
+                         f"{cal.f_range[0]:g}-{cal.f_range[1]:g} mm (converter?)"), None
+    if not cal.in_range(m):
+        return "range", (f"magnification {m:g} outside calibrated range "
+                         f"{cal.m_min:g}-{cal.m_max:g}"), None
+    return "ok", "", cal.correct(m, thin_lens_m(f, m))
+
+
+def _stored_text(info):
+    if info.sd_num == SENTINEL_NUM:
+        return "Infinity"
+    if not info.sd_den:
+        return f"{info.sd_num}/{info.sd_den}"
+    return f"{info.sd_num / info.sd_den:.3f}"
+
+
+def _same_value(info, num):
+    return bool(info.sd_den) and info.sd_num * 1000 == num * info.sd_den
+
+
+def find_3fr(folder):
+    """Yield (path, is_symlink) for every .3FR under folder, depth first,
+    sorted. Skips dot-directories, the tool's own output directory at the top
+    level, symlinked directories, and dot-files (macOS AppleDouble `._x`)."""
+    for root, dirs, files in os.walk(folder, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".")
+                         and not (pathlib.Path(root) == folder and d == OUTPUT_DIR))
+        for name in sorted(files):
+            if name.startswith(".") or not name.lower().endswith(".3fr"):
+                continue
+            p = pathlib.Path(root) / name
+            yield p, p.is_symlink()
+
+
+SUMMARY_ROWS = [
+    ("rewritten", "rewritten in place", "would rewrite in place"),
+    ("unchanged", "unchanged", "unchanged"),
+    ("copied", "copied with tag added", "would copy with tag added"),
+    ("exists", "output already exists", "output already exists"),
+    ("no-focus", "skipped, no focus data", "skipped, no focus data"),
+    ("no-cal", "skipped, no calibration", "skipped, no calibration"),
+    ("focal", "skipped, focal length outside calibration (converter?)",
+     "skipped, focal length outside calibration (converter?)"),
+    ("range", "skipped, outside calibrated range", "skipped, outside calibrated range"),
+    ("symlink", "skipped, symlink", "skipped, symlink"),
+    ("error", "errors", "errors"),
+]
+
+
+def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
+    """Run the whole job. Returns a Counter keyed by the SUMMARY_ROWS keys."""
+    tally = collections.Counter()
+    found = 0
+    for p, is_link in find_3fr(folder):
+        found += 1
+        rel = os.path.relpath(p, folder)
+        if is_link:
+            tally["symlink"] += 1
+            emit(f"{rel}  skipped: symlink (not followed)")
+            continue
+        try:
+            info = parse_file(p)
+            if info.sd_problem:
+                raise ParseError(f"{rel}: {info.sd_problem}; refusing to touch it")
+            status, detail, d = maker_note_distance(info, cals)
+            if status != "ok":
+                tally[status] += 1
+                emit(f"{rel}  skipped: {detail}")
+                continue
+            lens = info.lens_model
+            if info.sd_offset is not None:
+                num = _numerator(rel, d)
+                if _same_value(info, num):
+                    tally["unchanged"] += 1
+                    emit(f"{rel}  unchanged ({d:.3f} m, {lens})")
+                    continue
+                if dry_run:
+                    tally["rewritten"] += 1
+                    emit(f"{rel}  would rewrite stored {_stored_text(info)} -> {d:.3f} m  ({lens})")
+                    continue
+                write_subject_distance_inplace(p, info, d, undo_log)
+                tally["rewritten"] += 1
+                emit(f"{rel}  rewritten: stored {_stored_text(info)} -> {d:.3f} m  ({lens})")
+            else:
+                _numerator(rel, d)
+                dest = folder / OUTPUT_DIR / pathlib.Path(rel).parent
+                if (dest / p.name).exists():
+                    tally["exists"] += 1
+                    emit(f"{rel}  output already exists in {OUTPUT_DIR}/, left alone")
+                elif dry_run:
+                    tally["copied"] += 1
+                    emit(f"{rel}  would copy with tag added: {d:.3f} m  ({lens})")
+                else:
+                    try:
+                        _apply_one(p, info, d, dest, None)
+                    except SkipExisting:
+                        tally["exists"] += 1
+                        emit(f"{rel}  output already exists in {OUTPUT_DIR}/, left alone")
+                        continue
+                    tally["copied"] += 1
+                    emit(f"{rel}  copied with tag added: {d:.3f} m  ({lens}) -> {OUTPUT_DIR}/")
+        except PermissionError as exc:
+            logger.exception("run %s: not writable: %s", run_id, p)
+            tally["error"] += 1
+            emit(f"{rel}  ERROR: permission denied ({exc.strerror}); file is read-only "
+                 f"or not accessible, nothing changed")
+        except (ParseError, VerifyError, OSError) as exc:
+            logger.exception("run %s: failed on %s", run_id, p)
+            tally["error"] += 1
+            emit(f"{rel}  ERROR: {exc}")
+    tally["_found"] = found
+    return tally
+
+
+def cmd_run(args):
+    run_id = str(uuid.uuid4())
+    # Per-file problems are already printed as ERROR lines; the logger carries
+    # the tracebacks and state, shown only with -v.
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.CRITICAL,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
+    folder = pathlib.Path(args.folder).expanduser().resolve()
+    if not folder.is_dir():
+        print(f"error: not a folder: {args.folder} (if you meant a command, "
+              f"the commands are retrofit, calibrate, inspect, undo)", file=sys.stderr)
+        return 2
+    cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
+    if not cals:
+        print("warning: no lens calibrations loaded; keep the calibration folder next "
+              "to this script, or every file will be skipped", file=sys.stderr)
+    logger.info("run %s: folder=%s dry_run=%s", run_id, folder, args.dry_run)
+    undo_log = UndoLog(folder, run_id)
+    try:
+        tally = process_folder(folder, cals, args.dry_run, run_id, undo_log,
+                               emit=lambda line: print(line, flush=True))
+    finally:
+        undo_log.close()
+    found = tally.pop("_found", 0)
+    if not found:
+        print(f"no 3FR files found under {folder}")
+        return 0
+    idx = 2 if args.dry_run else 1
+    W = max(len(r[1]) for r in SUMMARY_ROWS) + 3
+    print()
+    print("DRY RUN: nothing was written" if args.dry_run else "Summary")
+    print(f"  {'files found:':<{W}}{found}")
+    for key, *labels in SUMMARY_ROWS:
+        print(f"  {labels[idx - 1] + ':':<{W}}{tally.get(key, 0)}")
+    if undo_log.path:
+        print(f"undo log: {undo_log.path}")
+        print(f"to reverse the in-place changes: python3 hb-focus-retrofit.py undo "
+              f"\"{undo_log.path}\"")
+    else:
+        print("undo log: none (nothing was changed in place)")
+    print(f"run_id: {run_id}")
+    logger.info("run %s done: %s", run_id, dict(tally))
+    return 1 if tally.get("error") else 0
+
+
+def _undo_one(entry):
+    """Returns (outcome, message); outcome in restored|already|skipped."""
+    path = pathlib.Path(entry["path"])
+    old, new = bytes.fromhex(entry["old_hex"]), bytes.fromhex(entry["new_hex"])
+    off, size = entry["offset"], entry["size"]
+    if len(old) != 8 or len(new) != 8 or not isinstance(off, int) or off < 0 \
+            or not isinstance(size, int) or off + 8 > size:
+        raise ValueError("log entry has implausible offset, size or byte values")
+    if not path.is_file():
+        return "skipped", f"{path}: file is missing"
+    with open(path, "r+b") as fh:
+        now_size = os.fstat(fh.fileno()).st_size
+        if now_size != size:
+            return "skipped", f"{path}: size is {now_size}, log says {size}; not touched"
+        cur = _read_at(fh, off, 8)
+        if cur == old:
+            return "already", f"{path}: already restored"
+        if cur != new:
+            return "skipped", (f"{path}: current bytes {cur.hex()} are neither the logged new "
+                               f"bytes nor the old bytes; changed since, not touched")
+        fh.seek(off)
+        fh.write(old)
+        fh.flush()
+        os.fsync(fh.fileno())
+        if _read_at(fh, off, 8) != old or os.fstat(fh.fileno()).st_size != size:
+            raise VerifyError(f"{path}: restore did not verify")
+    return "restored", f"{path}: restored"
+
+
+def cmd_undo(args):
+    run_id = str(uuid.uuid4())
+    logging.basicConfig(level=logging.CRITICAL,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
+    log = pathlib.Path(args.logfile).expanduser()
+    try:
+        lines = log.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        print(f"error: cannot read undo log: {exc}", file=sys.stderr)
+        return 2
+    logger.info("undo run %s: log=%s entries=%d", run_id, log, len(lines))
+    tally = collections.Counter()
+    numbered = [(i, ln) for i, ln in enumerate(lines, 1) if ln.strip()]
+    for lineno, line in reversed(numbered):
+        try:
+            outcome, msg = _undo_one(json.loads(line))
+        except (ValueError, KeyError, TypeError, OSError, VerifyError) as exc:
+            logger.exception("undo run %s: bad entry at line %d: %r", run_id, lineno, line[:200])
+            tally["error"] += 1
+            print(f"line {lineno}: ERROR: {exc}")
+            continue
+        tally[outcome] += 1
+        if outcome == "skipped":
+            logger.warning("undo run %s: skipped line %d: %s", run_id, lineno, msg)
+        print(f"line {lineno}: {msg}")
+    print()
+    print("Undo summary")
+    for key, label in (("restored", "restored"), ("already", "already restored"),
+                       ("skipped", "skipped"), ("error", "errors")):
+        print(f"  {label + ':':<36}{tally.get(key, 0)}")
+    print(f"run_id: {run_id}")
+    return 1 if (tally.get("skipped") or tally.get("error")) else 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="hb-focus-retrofit.py",
-        description="Add focus distance to Hasselblad 3FR files (writes copies; originals are never touched).",
+        usage="hb-focus-retrofit.py FOLDER [--dry-run]\n"
+              "       hb-focus-retrofit.py {retrofit,calibrate,inspect,undo} ...",
+        description="Point it at a folder of X2D II 3FR files: SubjectDistance is made to match "
+                    "the maker note and the lens calibration. Files that already have the tag are "
+                    "edited in place (8 bytes, with an undo log); older files get a copy under "
+                    "FOLDER/retrofitted. 'undo LOGFILE' reverses the in-place edits.",
     )
     p.add_argument("--version", action="version", version=VERSION)
     sub = p.add_subparsers(dest="command")
@@ -683,10 +1111,34 @@ def build_parser():
     i = sub.add_parser("inspect", help="show what the tool sees in a file (never writes)")
     i.add_argument("files", nargs="+")
     i.set_defaults(func=cmd_inspect)
+
+    u = sub.add_parser("undo", help="reverse the in-place edits recorded in an undo log")
+    u.add_argument("logfile", help="hb-focus-retrofit-undo-*.jsonl written by a folder run")
+    u.set_defaults(func=cmd_undo)
+    return p
+
+
+SUBCOMMANDS = ("retrofit", "calibrate", "inspect", "undo")
+
+
+def build_folder_parser():
+    p = argparse.ArgumentParser(
+        prog="hb-focus-retrofit.py",
+        description="Make SubjectDistance in every 3FR under FOLDER match the maker note.")
+    p.add_argument("--version", action="version", version=VERSION)
+    p.add_argument("folder", help="folder to process (recursive)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would happen; write nothing, create no log")
+    p.add_argument("-v", "--verbose", action="store_true", help="log progress to stderr")
+    p.set_defaults(func=cmd_run)
     return p
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--version"):
+        # `hb-focus-retrofit.py <folder>`: the one-command form
+        return cmd_run(build_folder_parser().parse_args(argv))
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
