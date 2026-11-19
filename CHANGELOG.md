@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `calibrate --measured` builds a calibration from a ladder with measured distances, so it can reach past the 3 m or so where the camera stops writing its own value. Put each mark's frames in a subfolder named by the measured distance (for example `9.987m/`); the folder name is taken as the true distance and SubjectDistance is ignored, Infinity included. Each mark becomes one point.
-- It refuses a folder it cannot read unambiguously: an unnamed subfolder, loose frames at the top level, an empty mark, more than one lens, converter frames mixed in (a maker focal-length spread above 25 percent), or two marks the magnification cannot tell apart. It warns on a frame that looks misfiled and on a mark whose frames disagree by more than 10 percent.
+- It refuses a folder it cannot read unambiguously: a subfolder not named as a distance (`<reading>m`), loose frames at the top level, an empty mark, more than one lens, converter frames mixed in (a maker focal-length spread above 25 percent), or two marks the magnification cannot tell apart. It warns on a frame that looks misfiled and on a mark whose frames disagree by more than 10 percent.
 - It prints an overlap table: per mark, the measured distance next to the camera's own value and the shipped calibration's prediction. That table is the check that both measure from the same reference point.
 - Output goes to `<lens>-measured.json`, and it will not write into `calibration/`, because a measured ladder that starts at 1 m would drop the shipped near range. Merging the two is a separate step.
 

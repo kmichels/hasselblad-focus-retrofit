@@ -718,8 +718,8 @@ def derive_measured_calibration(folder):
     if f_hi / f_lo > _F_SPREAD:
         raise CalibrationError(
             f"maker focal length ranges from {f_lo:g} mm ({lo_label}) to {f_hi:g} mm "
-            f"({hi_label}). A spread that wide means converter or extension-tube frames "
-            "are mixed into the ladder; shoot the lens bare and remove those frames.")
+            f"({hi_label}). A spread that wide means converter frames are mixed into the "
+            "ladder; shoot the lens bare and remove those frames.")
 
     points, rows = [], []
     shipped_cals = load_calibrations(SHIPPED_CALIBRATION_DIR)
@@ -1295,7 +1295,8 @@ def build_parser():
 
     c = sub.add_parser("calibrate", help="derive a lens calibration from new-firmware ladder shots")
     c.add_argument("--source", required=True, help="folder with ladder shots (one lens per folder)")
-    c.add_argument("--out", default=None, help="output JSON path (default: <lens>.json in current folder)")
+    c.add_argument("--out", default=None, help="output JSON path (default: <lens>.json in the current folder, "
+                   "or <lens>-measured.json with --measured)")
     c.add_argument("--contributor", default=None,
                     help="your name or handle, recorded in the calibration file so you get credit")
     c.add_argument("--measured", action="store_true",
