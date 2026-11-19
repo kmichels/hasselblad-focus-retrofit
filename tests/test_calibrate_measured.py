@@ -193,3 +193,19 @@ def test_converter_frames_mixed_in_are_an_error(tool, tmp_path):
               maker_m=m_for(4.0, f=F * 1.7))
     with pytest.raises(tool.CalibrationError, match="converter"):
         tool.derive_measured_calibration(src)
+
+
+def test_cli_measured_refuses_default_path_inside_shipped_folder(tool, tmp_path, capsys, monkeypatch):
+    # run from inside calibration/ without --out: the default path lands there too
+    src = make_measured(tmp_path)
+    target = tool.SHIPPED_CALIBRATION_DIR / "xcd-55v-measured.json"
+    assert not target.exists()
+    monkeypatch.chdir(tool.SHIPPED_CALIBRATION_DIR)
+    try:
+        rc = tool.main(["calibrate", "--source", str(src), "--measured"])
+        assert rc == 1
+        assert not target.exists()
+        assert "merge" in capsys.readouterr().err.lower()
+    finally:
+        if target.exists():
+            target.unlink()

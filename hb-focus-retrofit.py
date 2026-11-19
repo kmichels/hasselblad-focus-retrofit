@@ -722,6 +722,7 @@ def derive_measured_calibration(folder):
             "are mixed into the ladder; shoot the lens bare and remove those frames.")
 
     points, rows = [], []
+    shipped_cals = load_calibrations(SHIPPED_CALIBRATION_DIR)
     for d, name, good in per_mark:
         good.sort(key=lambda g: g[1].maker_m)
         ests = [thin_lens_m(i.maker_f, i.maker_m) for _, i in good]
@@ -741,7 +742,7 @@ def derive_measured_calibration(folder):
         points.append({"m": mid.maker_m, "f": mid.maker_f, "camera_distance_m": d,
                        "frames": len(good)})
         cams = [c for c in (_real_subject_distance(i) for _, i in good) if c is not None]
-        status, _, shipped = maker_note_distance(mid, load_calibrations(SHIPPED_CALIBRATION_DIR))
+        status, _, shipped = maker_note_distance(mid, shipped_cals)
         rows.append({"mark": name, "measured_m": d,
                      "camera_m": statistics.median(cams) if cams else None,
                      "camera_frames": len(cams),
@@ -825,18 +826,18 @@ def cmd_calibrate(args):
     suffix = "-measured.json" if measured else ".json"
     if args.out:
         out = pathlib.Path(args.out)
-        if measured and out.resolve().parent == SHIPPED_CALIBRATION_DIR.resolve():
-            print(f"error: refusing to write a measured ladder into {SHIPPED_CALIBRATION_DIR}. "
-                  "It only covers the distances you measured, and replacing a shipped "
-                  "file would drop that lens's near range. Merge the two as a "
-                  "separate step; write this file elsewhere.", file=sys.stderr)
-            return 1
     else:
         out = pathlib.Path(_slugify_lens(doc["lens_model"]) + suffix)
-        if out.exists():
-            print(f"error: {out} already exists; pass --out to choose a "
-                  f"different path", file=sys.stderr)
-            return 1
+    if measured and out.resolve().parent == SHIPPED_CALIBRATION_DIR.resolve():
+        print(f"error: refusing to write a measured ladder into {SHIPPED_CALIBRATION_DIR}. "
+              "It only covers the distances you measured, and replacing a shipped "
+              "file would drop that lens's near range. Merge the two as a "
+              "separate step; write this file elsewhere.", file=sys.stderr)
+        return 1
+    if not args.out and out.exists():
+        print(f"error: {out} already exists; pass --out to choose a "
+              f"different path", file=sys.stderr)
+        return 1
     out.write_text(json.dumps(doc, indent=2) + "\n")
     print(f"wrote {out.resolve()} ({doc['provenance']['frames']} points, lens {doc['lens_model']})")
     if not args.contributor:
