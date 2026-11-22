@@ -630,7 +630,9 @@ _F_SPREAD = 1.25
 
 def _real_subject_distance(info):
     sd = info.subject_distance
-    if sd is None or sd <= 0 or sd >= _SD_SENTINEL_M or sd >= 50:
+    # Any real value counts, however far: firmware 1.4.15.7 writes real values past
+    # 7 m on some autofocus frames. Only the "no distance recorded" marker is dropped.
+    if sd is None or sd <= 0 or sd >= _SD_SENTINEL_M:
         return None
     return sd
 
@@ -768,6 +770,48 @@ def derive_measured_calibration(folder):
     return doc, warnings, rows
 
 
+def merge_with_shipped(doc):
+    """Extend the shipped calibration for this lens with the measured far marks.
+
+    All shipped points are kept. A measured point is added only where it lies
+    beyond the shipped range (farther and a smaller magnification than every
+    shipped point); the marks inside
+    the shipped range serve as the overlap check and are not used for the fit.
+    Returns (merged_doc, added_distances, set_aside_distances).
+    """
+    shipped = None
+    for p in sorted(SHIPPED_CALIBRATION_DIR.glob("*.json")):
+        try:
+            d = json.loads(p.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if d.get("lens_model") == doc["lens_model"]:
+            shipped = d
+            break
+    if shipped is None:
+        raise CalibrationError(f"no shipped calibration for {doc['lens_model']} to merge with")
+    far = max(q["camera_distance_m"] for q in shipped["points"])
+    m_floor = min(q["m"] for q in shipped["points"])
+    # A mark just past the shipped end can still have a magnification the shipped
+    # curve already reaches (3 m against a 2.9 m end); it is overlap, not extension.
+    added = [q for q in doc["points"] if q["camera_distance_m"] > far and q["m"] < m_floor]
+    set_aside = [q["camera_distance_m"] for q in doc["points"] if q not in added]
+    if not added:
+        raise CalibrationError(
+            f"no measured mark extends the shipped range (farthest shipped point "
+            f"{far:g} m); nothing to merge")
+    merged = {"lens_model": shipped["lens_model"],
+              "points": shipped["points"] + [
+                  {k: q[k] for k in ("m", "f", "camera_distance_m")} for q in added],
+              "provenance": dict(shipped.get("provenance", {}))}
+    prov = merged["provenance"]
+    prov["frames"] = len(merged["points"])
+    prov["extended_with_measured"] = [q["camera_distance_m"] for q in added]
+    prov["extension_firmware"] = doc["provenance"].get("firmware", "")
+    prov["extension_reference"] = doc["provenance"].get("reference", "")
+    return merged, [q["camera_distance_m"] for q in added], set_aside
+
+
 def _slugify_lens(lens_model):
     """Turn an untrusted EXIF lens name into a safe bare filename stem.
 
@@ -795,19 +839,20 @@ def _slugify_lens(lens_model):
 def _print_overlap(rows):
     print("\noverlap check (your measured distance vs the camera's own value and the "
           "shipped calibration):")
-    print(f"  {'mark':<10} {'measured':>9}  {'camera (frames)':<16} shipped calibration")
+    print(f"  {'mark':<10} {'measured':>9}  {'camera (frames) vs measured':<28} shipped calibration vs measured")
     for r in rows:
-        cam = (f"{r['camera_m']:.2f} m ({r['camera_frames']})" if r["camera_m"] is not None
-               else "no value")
+        cam = (f"{r['camera_m']:.2f} m ({r['camera_frames']}) "
+               f"{100 * (r['camera_m'] / r['measured_m'] - 1):+.1f}%"
+               if r["camera_m"] is not None else "no value")
         if r["shipped_m"] is not None:
-            shp = f"{r['shipped_m']:.2f} m"
+            shp = f"{r['shipped_m']:.2f} m {100 * (r['shipped_m'] / r['measured_m'] - 1):+.1f}%"
         elif r["shipped_status"] == "range":
             shp = "outside range"
         elif r["shipped_status"] == "no-cal":
             shp = "no calibration"
         else:
             shp = "n/a"
-        print(f"  {r['mark']:<10} {r['measured_m']:>7.3f} m  {cam:<16} {shp}")
+        print(f"  {r['mark']:<10} {r['measured_m']:>7.3f} m  {cam:<28} {shp}")
 
 
 def cmd_calibrate(args):
@@ -823,13 +868,25 @@ def cmd_calibrate(args):
         return 1
     doc["provenance"]["date"] = datetime.date.today().isoformat()
     doc["provenance"]["contributor"] = args.contributor or ""
-    suffix = "-measured.json" if measured else ".json"
+    merge = measured and getattr(args, "merge_shipped", False)
+    if getattr(args, "merge_shipped", False) and not measured:
+        print("error: --merge-shipped needs --measured", file=sys.stderr)
+        return 1
+    merged_note = None
+    if merge:
+        try:
+            doc, added, set_aside = merge_with_shipped(doc)
+        except CalibrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        merged_note = (added, set_aside)
+    suffix = "-merged.json" if merge else ("-measured.json" if measured else ".json")
     if args.out:
         out = pathlib.Path(args.out)
     else:
         out = pathlib.Path(_slugify_lens(doc["lens_model"]) + suffix)
     if measured and out.resolve().parent == SHIPPED_CALIBRATION_DIR.resolve():
-        print(f"error: refusing to write a measured ladder into {SHIPPED_CALIBRATION_DIR}. "
+        print(f"error: refusing to write a measured or merged ladder into {SHIPPED_CALIBRATION_DIR}. "
               "It only covers the distances you measured, and replacing a shipped "
               "file would drop that lens's near range. Merge the two as a "
               "separate step; write this file elsewhere.", file=sys.stderr)
@@ -856,10 +913,19 @@ def cmd_calibrate(args):
     if measured:
         _print_overlap(rows)
         ds = [p["camera_distance_m"] for p in doc["points"]]
-        print(f"\nthis file covers {min(ds):g} to {max(ds):g} m only. Do not copy it into "
-              "calibration/: merging it with the shipped near-range points is a separate "
-              "step, once the overlap rows show the camera's values and your measured "
-              "distances agree.")
+        if merged_note:
+            added, set_aside = merged_note
+            print(f"\nmerged: shipped points kept, measured marks added beyond the shipped "
+                  f"range: {', '.join(f'{d:g}' for d in added)} m"
+                  + (f"; marks inside it used only for the overlap check: "
+                     f"{', '.join(f'{d:g}' for d in set_aside)} m" if set_aside else "")
+                  + f". Curve covers {min(ds):g} to {max(ds):g} m. Check the overlap rows "
+                  "before copying it into calibration/.")
+        else:
+            print(f"\nthis file covers {min(ds):g} to {max(ds):g} m only. Do not copy it into "
+                  "calibration/. To extend the shipped curve, rerun with --merge-shipped, "
+                  "once the overlap rows show the camera's values and your measured "
+                  "distances agree.")
     return 0
 
 
@@ -1329,6 +1395,9 @@ def build_parser():
     c.add_argument("--measured", action="store_true",
                    help="ladder with laser-measured distances: one subfolder per mark named "
                         "by the reading (e.g. 9.987m/); the folder name is the true distance")
+    c.add_argument("--merge-shipped", action="store_true",
+                   help="with --measured: keep the shipped points for this lens and add the "
+                        "measured marks beyond them; writes <lens>-merged.json")
     c.set_defaults(func=cmd_calibrate)
 
     i = sub.add_parser("inspect", help="show what the tool sees in a file (never writes)")

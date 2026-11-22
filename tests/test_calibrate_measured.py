@@ -209,3 +209,60 @@ def test_cli_measured_refuses_default_path_inside_shipped_folder(tool, tmp_path,
     finally:
         if target.exists():
             target.unlink()
+
+
+def test_overlap_shows_real_far_camera_values(tool, tmp_path):
+    # firmware 1.4.15.7 writes real values past 3 m (and past 50 m is not special either)
+    def sd(d):
+        return (int(d * 1000 * 1.02), 1000) if d >= 6 else (4294967295, 1)
+    _, _, rows = tool.derive_measured_calibration(make_measured(tmp_path, sd=sd))
+    by = {r["measured_m"]: r for r in rows}
+    assert by[8.0]["camera_m"] == pytest.approx(8.16)
+    assert by[20.0]["camera_m"] == pytest.approx(20.4)
+    assert by[4.0]["camera_m"] is None
+
+
+def test_overlap_table_prints_percent_differences(tool, tmp_path, capsys):
+    rows = [{"mark": "8.000m", "measured_m": 8.0, "camera_m": 8.4, "camera_frames": 3,
+             "shipped_m": None, "shipped_status": "range"}]
+    tool._print_overlap(rows)
+    assert "+5.0%" in capsys.readouterr().out
+
+
+def _shipped_55v(tool):
+    import pathlib
+    return json.loads((tool.SHIPPED_CALIBRATION_DIR / "xcd-55v.json").read_text())
+
+
+def test_merge_shipped_keeps_near_points_and_adds_far_marks(tool, tmp_path):
+    shipped = _shipped_55v(tool)
+    far = max(p["camera_distance_m"] for p in shipped["points"])
+    doc, _, _ = tool.derive_measured_calibration(make_measured(tmp_path))
+    merged, added, set_aside = tool.merge_with_shipped(doc)
+    assert all(d > far for d in added) and added
+    assert set_aside and all(d not in added for d in set_aside)
+    assert len(merged["points"]) == len(shipped["points"]) + len(added)
+    assert merged["points"][:len(shipped["points"])] == shipped["points"]
+    p = tmp_path / "m.json"
+    p.write_text(json.dumps(merged))
+    cal = tool.Calibration.from_json(p)
+    assert cal.correct(m_for(10.0), tool.thin_lens_m(F, m_for(10.0))) == pytest.approx(10.0)
+
+
+def test_merge_shipped_requires_measured_and_refuses_shipped_dir(tool, tmp_path, capsys):
+    src = make_measured(tmp_path)
+    assert tool.main(["calibrate", "--source", str(src), "--merge-shipped"]) == 1
+    shipped = tool.SHIPPED_CALIBRATION_DIR / "xcd-55v.json"
+    before = shipped.read_bytes()
+    rc = tool.main(["calibrate", "--source", str(src), "--measured", "--merge-shipped",
+                    "--out", str(shipped)])
+    assert rc == 1 and shipped.read_bytes() == before
+
+
+def test_cli_merge_shipped_writes_merged_file(tool, tmp_path, capsys, monkeypatch):
+    src = make_measured(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert tool.main(["calibrate", "--source", str(src), "--measured", "--merge-shipped"]) == 0
+    doc = json.loads((tmp_path / "xcd-55v-merged.json").read_text())
+    assert doc["provenance"]["extended_with_measured"]
+    assert "merged:" in capsys.readouterr().out

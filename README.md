@@ -246,7 +246,7 @@ python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V-Ladder --contribut
 
 ### Calibrating with measured distances
 
-The ladder above can only reach as far as the camera writes a real distance, about 3 m. To go further you need distances you measured yourself, for example with a laser measure, taken from the focal plane mark (the Φ symbol on the body). Shoot two or three autofocus frames per mark, re-locking focus on something else before each one, and sort them into one subfolder per mark, named by the exact reading:
+The ladder above can only reach as far as the camera writes a real distance, which is about 3 m on most frames (some firmware 1.4.15.7 autofocus frames carry real values well past that). To go further you need distances you measured yourself, for example with a laser measure, taken from the focal plane mark (the Φ symbol on the body). Shoot two or three autofocus frames per mark, re-locking focus on something else before each one, and sort them into one subfolder per mark, named by the exact reading:
 
 ```
 55V/1.000m/   55V/2.000m/   55V/9.987m/   55V/20.000m/
@@ -258,7 +258,7 @@ Then run:
 python3 hb-focus-retrofit.py calibrate --source ~/Desktop/55V --measured --contributor "Your Name"
 ```
 
-The folder name is the true distance, so it doesn't matter that the camera writes Infinity past a few metres. Each mark becomes one point. Besides the residuals, the tool prints an overlap table: for every mark it shows your measurement, the camera's own value where it wrote one, and what the shipped calibration predicts. On the near marks those three should agree; if they don't, the reference point is off and the far points shouldn't be trusted. The result goes to `<lens>-measured.json` and covers only the distances you measured, so don't copy it over a shipped calibration. Send it in and it will be merged with the near-range points.
+The folder name is the true distance, so it doesn't matter that the camera writes Infinity past a few metres. Each mark becomes one point. Besides the residuals, the tool prints an overlap table: for every mark it shows your measurement, the camera's own value where it wrote one, and what the shipped calibration predicts. On the near marks those three should agree; if they don't, the reference point is off and the far points shouldn't be trusted. The result goes to `<lens>-measured.json` and covers only the distances you measured, so don't copy it over a shipped calibration. To extend the shipped curve yourself, add `--merge-shipped`: it keeps every shipped point for the lens, adds the measured marks that lie beyond the shipped range, uses the marks inside it only for the overlap check, and writes `<lens>-merged.json`. The overlap table also shows each camera and shipped value as a percentage off your measurement. Review it before copying anything into `calibration/`.
 
 
 ## FAQ
