@@ -124,7 +124,9 @@ def test_each_skip_reason_counted_and_file_untouched(tool, tmp_path, capsys):
     ok = dict(subject_distance=INF)
     files = {
         "nofields.3FR": dict(include_maker_fields=False, **ok),
-        "zero_m.3FR": dict(maker_m=0.0, **ok),
+        # f non-zero with m == 0 is a frame at infinity, see test_infinity.py;
+        # all three focus fields zero is the lost-maker-note case.
+        "zero_all.3FR": dict(maker_f=0.0, maker_m=0.0, **ok),
         "zero_f.3FR": dict(maker_f=0.0, maker_m=KNOT_M, **ok),
         "bad_f.3FR": dict(maker_f=500.0, maker_m=KNOT_M, **ok),
         "nocal.3FR": dict(lens_model="XCD 38V", maker_f=KNOT_F, maker_m=KNOT_M, **ok),
