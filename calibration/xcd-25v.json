@@ -1,5 +1,6 @@
 {
  "lens_model": "XCD 25V",
+ "reliable_to_m": 2.0,
  "points": [
   {
    "m": 0.00297,
