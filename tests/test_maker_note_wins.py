@@ -130,7 +130,6 @@ def test_each_skip_reason_counted_and_file_untouched(tool, tmp_path, capsys):
         "zero_f.3FR": dict(maker_f=0.0, maker_m=KNOT_M, **ok),
         "bad_f.3FR": dict(maker_f=500.0, maker_m=KNOT_M, **ok),
         "nocal.3FR": dict(lens_model="XCD 38V", maker_f=KNOT_F, maker_m=KNOT_M, **ok),
-        "far.3FR": dict(maker_f=55.0, maker_m=0.001, **ok),
         "near.3FR": dict(maker_f=KNOT_F, maker_m=0.9, **ok),
     }
     before = {}
@@ -142,7 +141,7 @@ def test_each_skip_reason_counted_and_file_untouched(tool, tmp_path, capsys):
     c = counts(out)
     assert c["skipped, no focus data"] == 4
     assert c["skipped, no calibration"] == 1
-    assert c["skipped, outside calibrated range"] == 2
+    assert c["skipped, closer than calibrated range"] == 1
     assert c["rewritten in place"] == 0 and c["errors"] == 0
     assert "no calibration for XCD 38V" in out
     for name, b in before.items():
@@ -152,11 +151,11 @@ def test_each_skip_reason_counted_and_file_untouched(tool, tmp_path, capsys):
 
 def test_tag_absent_files_obey_the_same_skips(tool, tmp_path, capsys):
     shoot = make_shoot(tmp_path)
-    build_3fr(shoot / "far.3FR", maker_f=55.0, maker_m=0.001)
+    build_3fr(shoot / "near.3FR", maker_f=KNOT_F, maker_m=0.9)
     build_3fr(shoot / "nocal.3FR", lens_model="XCD 38V", maker_f=KNOT_F, maker_m=KNOT_M)
     assert tool.main([str(shoot)]) == 0
     c = counts(capsys.readouterr().out)
-    assert c["skipped, outside calibrated range"] == 1
+    assert c["skipped, closer than calibrated range"] == 1
     assert c["skipped, no calibration"] == 1
     assert c["copied with tag added"] == 0
     assert not (shoot / "retrofitted").exists()

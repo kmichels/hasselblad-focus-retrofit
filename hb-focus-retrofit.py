@@ -229,8 +229,10 @@ def classify(info):
 
 
 class Calibration:
-    def __init__(self, lens_model, points, f_range=None):
+    def __init__(self, lens_model, points, f_range=None, far_distance_m=None):
         self.f_range = f_range  # (min, max) focal length of the calibration points
+        # camera distance at the farthest calibration point (smallest m), for reporting
+        self.far_distance_m = far_distance_m
         # points: list of (m, ratio) sorted by m ascending;
         # ratio = camera_distance / thin_lens_m(f, m) at that knot
         self.lens_model = lens_model
@@ -262,7 +264,8 @@ class Calibration:
             if m0 == m1:
                 raise ValueError(f"duplicate m value {m0!r} in calibration points")
         fs = [p["f"] for p in doc["points"]]
-        return cls(doc["lens_model"], pts, (min(fs), max(fs)))
+        far = min(doc["points"], key=lambda p: p["m"])["camera_distance_m"]
+        return cls(doc["lens_model"], pts, (min(fs), max(fs)), far)
 
     @property
     def m_min(self):
@@ -286,6 +289,12 @@ class Calibration:
                 t = (m - m0) / (m1 - m0)
                 return r0 + t * (r1 - r0)
         return pts[-1][1]
+
+    @property
+    def far_ratio(self):
+        """Ratio at the far end of the calibrated range; the value held
+        constant for estimates beyond it."""
+        return self.points[0][1]
 
     def correct(self, m, d_est):
         return d_est * self.ratio(m)
@@ -749,7 +758,9 @@ def derive_measured_calibration(folder):
                      "camera_m": statistics.median(cams) if cams else None,
                      "camera_frames": len(cams),
                      "shipped_m": shipped if status == "ok" else None,
-                     "shipped_status": status})
+                     # beyond the shipped range folder mode writes an estimate, but
+                     # as a calibration prediction the shipped curve has none there
+                     "shipped_status": "range" if status in ("estimate", "toofar") else status})
 
     for (d0, p0), (d1, p1) in zip(
             [(p["camera_distance_m"], p) for p in points][:-1],
@@ -952,7 +963,18 @@ def cmd_inspect(args):
             d_est = thin_lens_m(info.maker_f, info.maker_m)
             cal = cals.get(info.lens_model or "")
             print(f"  thin-lens estimate: {d_est:.2f} m")
-            if cal:
+            if cal and info.maker_m < cal.m_min:
+                clamped = d_est * cal.far_ratio
+                far = (f", about {cal.far_distance_m:g} m" if cal.far_distance_m else "")
+                print(f"  estimate: {clamped:.2f} m (thin-lens distance x {cal.far_ratio:.3f}, "
+                      f"the ratio at the far end of the calibration, held constant)")
+                print(f"  far end of the calibration ({cal.lens_model}): magnification "
+                      f"{cal.m_min:g}{far}. This frame is focused beyond it, so the value "
+                      f"is an estimate that no measured distance has checked.")
+                if maker_note_distance(info, cals)[0] == "estimate":
+                    print("  folder mode: would be written as an estimate "
+                          "(marked 'estimated, beyond calibration')")
+            elif cal:
                 print(f"  calibrated ({cal.lens_model}): {cal.correct(info.maker_m, d_est):.2f} m")
             else:
                 print("  calibrated: UNCALIBRATED (no data for this lens)")
@@ -1042,12 +1064,13 @@ def _fsync_dir(folder):
         os.close(fd)
 
 
-def write_subject_distance_inplace(path, info, dist_m, undo_log):
+def write_subject_distance_inplace(path, info, dist_m, undo_log, kind="distance"):
     """Overwrite the existing 8-byte SubjectDistance RATIONAL with
     round(d*1000)/1000, or with the EXIF infinity (0xFFFFFFFF/1, the bytes the
     camera itself writes) when dist_m is None. Order: verify the bytes are
     still what the parser saw, make the undo line durable, write, fsync,
-    verify, restore on failure."""
+    verify, restore on failure. kind is recorded in the undo log as new_kind
+    ("distance", or "estimate" for a value beyond the calibrated range)."""
     name = info.path.name
     if info.sd_offset is None:
         raise ParseError(f"{name}: no SubjectDistance to overwrite")
@@ -1067,7 +1090,7 @@ def write_subject_distance_inplace(path, info, dist_m, undo_log):
             "old_hex": old.hex(), "new_hex": new.hex(),
             "old_value": (info.sd_num / info.sd_den) if info.sd_den else None,
             "new_value": None if dist_m is None else num / 1000,
-            "new_kind": "infinity" if dist_m is None else "distance",
+            "new_kind": "infinity" if dist_m is None else kind,
             "lens": info.lens_model,
         })
         fh.seek(off)
@@ -1105,9 +1128,12 @@ def _restore_bytes(fh, off, old):
 def maker_note_distance(info, cals):
     """(status, detail, distance_m). status is 'ok', 'infinity' (distance_m is
     None; the stored value becomes the EXIF infinity) or a skip key:
-    'no-focus', 'no-cal', 'focal', 'range'. Same calibration lookup and formula as the
-    retrofit path, but never extrapolates: outside the calibrated magnification
-    range the file is skipped, not clamped."""
+    'no-focus', 'no-cal', 'focal', 'range' (closer than the calibration reaches),
+    'toofar' (thin-lens distance beyond 1 km). 'estimate' means the frame is
+    focused farther than the calibration reaches: distance_m is the thin-lens
+    distance times the calibration ratio at the far end of the range, held
+    constant. No measured distance has checked it. Inside the range the
+    value is calibrated; closer than the range the file is skipped."""
     f, m = info.maker_f, info.maker_m
     if f is None or m is None:
         return "no-focus", "no maker-note focus fields", None
@@ -1128,10 +1154,17 @@ def maker_note_distance(info, cals):
                             <= cal.f_range[1] * (1 + F_TOLERANCE)):
         return "focal", (f"maker focal {f:g} mm outside the calibrated "
                          f"{cal.f_range[0]:g}-{cal.f_range[1]:g} mm (converter?)"), None
-    if not cal.in_range(m):
-        return "range", (f"magnification {m:g} outside calibrated range "
+    if m > cal.m_max:
+        return "range", (f"magnification {m:g} is closer than the calibrated range "
                          f"{cal.m_min:g}-{cal.m_max:g}"), None
-    return "ok", "", cal.correct(m, thin_lens_m(f, m))
+    d_thin = thin_lens_m(f, m)
+    if m < cal.m_min:
+        if d_thin > 1000:
+            # same guard as classify(); also keeps the uint32 numerator in range
+            return "toofar", f"computed distance {d_thin:.0f} m is beyond 1 km", None
+        return "estimate", (f"magnification {m:g} is beyond the calibrated range "
+                            f"{cal.m_min:g}-{cal.m_max:g}"), d_thin * cal.far_ratio
+    return "ok", "", cal.correct(m, d_thin)
 
 
 def _stored_text(info):
@@ -1162,8 +1195,12 @@ def find_3fr(folder):
 
 SUMMARY_ROWS = [
     ("rewritten", "rewritten in place", "would rewrite in place"),
+    ("estimated", "estimated in place, beyond calibration",
+     "would estimate in place, beyond calibration"),
     ("unchanged", "unchanged", "unchanged"),
     ("copied", "copied with tag added", "would copy with tag added"),
+    ("estimated-copied", "estimated and copied with tag added, beyond calibration",
+     "would estimate and copy with tag added, beyond calibration"),
     ("exists", "output already exists", "output already exists"),
     ("no-focus", "skipped, no focus data", "skipped, no focus data"),
     ("inf-notag", "skipped, infinity, no tag to correct",
@@ -1171,7 +1208,8 @@ SUMMARY_ROWS = [
     ("no-cal", "skipped, no calibration", "skipped, no calibration"),
     ("focal", "skipped, focal length outside calibration (converter?)",
      "skipped, focal length outside calibration (converter?)"),
-    ("range", "skipped, outside calibrated range", "skipped, outside calibrated range"),
+    ("range", "skipped, closer than calibrated range", "skipped, closer than calibrated range"),
+    ("toofar", "skipped, computed distance beyond 1 km", "skipped, computed distance beyond 1 km"),
     ("symlink", "skipped, symlink", "skipped, symlink"),
     ("error", "errors", "errors"),
 ]
@@ -1193,7 +1231,7 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
             if info.sd_problem:
                 raise ParseError(f"{rel}: {info.sd_problem}; refusing to touch it")
             status, detail, d = maker_note_distance(info, cals)
-            if status not in ("ok", "infinity"):
+            if status not in ("ok", "estimate", "infinity"):
                 tally[status] += 1
                 emit(f"{rel}  skipped: {detail}")
                 continue
@@ -1214,19 +1252,24 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
                     tally["rewritten"] += 1
                     emit(f"{rel}  rewritten: stored {_stored_text(info)} -> Infinity  ({lens})")
                 continue
+            est = status == "estimate"
+            tag = ", estimated, beyond calibration" if est else ""
+            kind = "estimate" if est else "distance"
             if info.sd_offset is not None:
                 num = _numerator(rel, d)
                 if _same_value(info, num):
                     tally["unchanged"] += 1
-                    emit(f"{rel}  unchanged ({d:.3f} m, {lens})")
+                    emit(f"{rel}  unchanged ({d:.3f} m{tag}, {lens})")
                     continue
                 if dry_run:
-                    tally["rewritten"] += 1
-                    emit(f"{rel}  would rewrite stored {_stored_text(info)} -> {d:.3f} m  ({lens})")
+                    tally["estimated" if est else "rewritten"] += 1
+                    emit(f"{rel}  would rewrite stored {_stored_text(info)} -> {d:.3f} m  "
+                         f"({lens}{tag})")
                     continue
-                write_subject_distance_inplace(p, info, d, undo_log)
-                tally["rewritten"] += 1
-                emit(f"{rel}  rewritten: stored {_stored_text(info)} -> {d:.3f} m  ({lens})")
+                write_subject_distance_inplace(p, info, d, undo_log, kind)
+                tally["estimated" if est else "rewritten"] += 1
+                emit(f"{rel}  rewritten: stored {_stored_text(info)} -> {d:.3f} m  "
+                     f"({lens}{tag})")
             else:
                 _numerator(rel, d)
                 dest = folder / OUTPUT_DIR / pathlib.Path(rel).parent
@@ -1234,8 +1277,8 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
                     tally["exists"] += 1
                     emit(f"{rel}  output already exists in {OUTPUT_DIR}/, left alone")
                 elif dry_run:
-                    tally["copied"] += 1
-                    emit(f"{rel}  would copy with tag added: {d:.3f} m  ({lens})")
+                    tally["estimated-copied" if est else "copied"] += 1
+                    emit(f"{rel}  would copy with tag added: {d:.3f} m  ({lens}{tag})")
                 else:
                     try:
                         _apply_one(p, info, d, dest, None)
@@ -1243,8 +1286,8 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
                         tally["exists"] += 1
                         emit(f"{rel}  output already exists in {OUTPUT_DIR}/, left alone")
                         continue
-                    tally["copied"] += 1
-                    emit(f"{rel}  copied with tag added: {d:.3f} m  ({lens}) -> {OUTPUT_DIR}/")
+                    tally["estimated-copied" if est else "copied"] += 1
+                    emit(f"{rel}  copied with tag added: {d:.3f} m  ({lens}{tag}) -> {OUTPUT_DIR}/")
         except PermissionError as exc:
             logger.exception("run %s: not writable: %s", run_id, p)
             tally["error"] += 1
