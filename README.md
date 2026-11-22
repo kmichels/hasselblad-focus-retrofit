@@ -48,7 +48,7 @@ The exit code is 0 when no file had an error and 1 when any did. Skipped files a
 
 Read these before you run it on a whole archive.
 
-- **Far focus is an estimate, not a calibrated value.** Each lens is only calibrated out to a few metres, because the reference distances so far came from the camera's own value, which it only records reliably at close range. A frame focused beyond that (but not at the infinity stop) gets thin-lens distance times the calibration ratio at the far end of the range, held constant, and is reported as "estimated, beyond calibration". No measured distance has checked these values. They exist because the camera's own value is no better out there: it flattens toward a ceiling (about 2.3 m on the XCD 25V, about 10 m on the 55V, about 12 to 14 m on the 90V in the author's archive) while the maker-note magnification keeps falling. On three autofocus frames of subjects more than 20 m away (55V, firmware 1.4.15.7) the camera wrote 7.2 to 8.4 m; the thin-lens distance from the maker note is 14.5 to 22.6 m. See "Estimates beyond the calibrated range" below.
+- **Far focus is an estimate, not a calibrated value.** Each lens is only calibrated out to a few metres, because the reference distances so far came from the camera's own value, which it only records reliably at close range. A frame focused beyond that (but not at the infinity stop; the XCD 25V is the exception, see below) gets thin-lens distance times the calibration ratio at the far end of the range, held constant, and is reported as "estimated, beyond calibration". No measured distance has checked these values. They exist because the camera's own value is no better out there: it flattens toward a ceiling (about 2.3 m on the XCD 25V, about 10 m on the 55V, about 12 to 14 m on the 90V in the author's archive) while the maker-note magnification keeps falling. On three autofocus frames of subjects more than 20 m away (55V, firmware 1.4.15.7) the camera wrote 7.2 to 8.4 m; the thin-lens distance from the maker note is 14.5 to 22.6 m. See "Estimates beyond the calibrated range" below.
 
   | Lens | Calibrated from | to about |
   |---|---|---|
@@ -58,7 +58,7 @@ Read these before you run it on a whole archive.
   | XCD 120 | 0.40 m | 2.3 m |
   | XCD 135 | 0.95 m | 3.8 m |
 
-- **The XCD 25V estimate is the least certain of the five.** Its far-end ratio (about 0.24, so the tool writes roughly a quarter of the thin-lens distance) was derived from the camera's own values near its ceiling, not from a measured distance, and it is far from 1. Treat 25V estimates as the roughest of all.
+- **XCD 25V: beyond about 2 m the tool writes nothing.** One measured test (X2D II, firmware 1.4.15.7, one body, one copy of the lens, autofocus, f/8, targets at laser-measured distances) showed that the 25V's maker-note magnification does not follow subject distance at far focus. Frames at 3 m held 0.00328 and 0.00359; frames at 10 m held 0.00359 (two frames) and 0.00172 (two frames, same spot); a frame of trees 20 m or more away held 0.00265. The camera's own SubjectDistance on all of them read 2.06 to 2.30 m. Closer in the lens behaves (a wall at about 1.2 m held 0.02301 and calibrates to 1.05 m). So a far-focus frame from this lens does not carry enough information to say how far away the subject was. The tool therefore leaves such a frame untouched (any 25V frame whose result would be 2.0 m or more, or that is beyond the far end of the calibration) and counts it as "far focus, distance unknown (XCD 25V beyond 2.0 m)". It writes no value: not an estimate, not infinity (a 3 m subject is not at infinity), and not an EXIF "unknown" of 0, because how Lightroom treats a distance of 0 is untested. The camera's own value stays in the file. If that value is a stale near one (below 1.5 m on a far-focus frame), the frame is reported on a separate line so you see it; the tool still does not change it. Frames at the infinity stop and frames nearer than 2.0 m behave as before. One body and one lens copy is a small sample; if you have a different result, please open an issue.
 
 - **Five lenses only.** Every other lens is skipped, including both E-series zooms. You can calibrate your own lens and contribute it (see "Calibrating your own lens").
 - **One photographer's equipment.** All five calibrations come from one person's X2D II and one copy of each lens, on firmware 1.3.16.1 and 1.3.16.2. Copy-to-copy variation between lenses has not been measured.
@@ -104,10 +104,11 @@ The report names the reason and the summary counts each one separately.
 - **No focus data.** The maker note has no focus fields (firmware before 1.2.7.11), or all of them are zero (the camera lost them, which has been seen on firmware 1.2.7.16, 1.3.16.1 and 1.3.16.2), or the focal length is implausible against the file's nominal focal length. There is nothing to compute from, and whatever the camera stored stays in the file.
 - **Infinity, no tag to correct.** The frame is focused at infinity but has no SubjectDistance tag (firmware before 1.3.16.1). There is no wrong value to fix, so no copy is made.
 - **No calibration for the lens.** The distance depends on a per-lens calibration and this lens does not have one yet. This includes the XCD 20-35E and XCD 35-100E zooms. The tool does not guess with the raw optics formula in this mode.
+- **Far focus, distance unknown (XCD 25V beyond 2.0 m).** The file is left untouched and nothing is added to the undo log. The reason is in the XCD 25V bullet under "Current limitations".
 - **Closer than calibrated range.** The magnification is larger than the calibration was measured at (an extreme close-up). The tool leaves these alone rather than write a number it cannot support.
 - **Computed distance beyond 1 km.** The magnification is so small that the thin-lens distance exceeds 1 km, which is effectively infinity but not the infinity stop. Nothing is written.
 
-Frames focused beyond the far end of the calibration are not skipped: they get an estimate, see "Estimates beyond the calibrated range".
+Frames focused beyond the far end of the calibration are not skipped: they get an estimate, see "Estimates beyond the calibrated range". The exception is the XCD 25V, whose far frames are left unchanged as "far focus, distance unknown" (see "Current limitations").
 - **Focal length outside calibration (converter?).** The maker-note focal length is more than 10 percent outside the range the lens was calibrated at, which usually means a converter is attached.
 - **Symlink.** Symbolic links to files are not followed, so the tool never edits a file outside the folder you gave it.
 
@@ -131,11 +132,11 @@ To add a lens, see "Calibrating your own lens" below.
 
 When the maker-note magnification is positive but smaller than the far end of the calibration, the tool writes thin-lens distance times the calibration ratio at the far end of the range, held constant, in place (8 bytes, undo log, whatever value was stored, same as a calibrated frame). The report line says "estimated, beyond calibration" and the summary counts these frames on their own lines. If the stored value already equals the estimate to the tool's rounding, the frame is counted as unchanged. `inspect` shows the estimate and the far end of the calibration for a frame like this. The undo log records `"new_kind": "estimate"`; `undo` restores the old bytes exactly, as for any other entry.
 
-This is an estimate that no measured distance has checked. The ratio at the far end, and what it writes at a few thin-lens distances:
+This is an estimate that no measured distance has checked (it does not apply to the XCD 25V, which is left unchanged out there). The ratio at the far end, and what it writes at a few thin-lens distances:
 
 | Lens | Calibrated out to (magnification, camera distance) | Ratio held | Written at thin-lens 5 / 10 / 20 / 50 m |
 |---|---|---|---|
-| XCD 25V | 0.00297, 2.1 m | 0.242 | 1.2 / 2.4 / 4.8 / 12.1 m |
+| XCD 25V | 0.00297, 2.1 m | not used (see "XCD 25V: beyond about 2 m") | nothing is written |
 | XCD 55V | 0.01803, 2.9 m | 0.925 | 4.6 / 9.2 / 18.5 / 46.2 m |
 | XCD 90V | 0.02993, 3.1 m | 1.023 | 5.1 / 10.2 / 20.5 / 51.1 m |
 | XCD 120 | 0.05453, 2.3 m | 1.048 | 5.2 / 10.5 / 21.0 / 52.4 m |

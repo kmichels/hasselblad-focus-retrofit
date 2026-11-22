@@ -229,7 +229,13 @@ def classify(info):
 
 
 class Calibration:
-    def __init__(self, lens_model, points, f_range=None, far_distance_m=None):
+    def __init__(self, lens_model, points, f_range=None, far_distance_m=None,
+                 reliable_to_m=None):
+        # Optional: the farthest distance (m) this lens's calibration can be
+        # trusted to. A frame whose result reaches it, or lies beyond the far
+        # end of the calibration, is left unchanged and reported as far focus,
+        # distance unknown. None = no such limit (the estimate path applies).
+        self.reliable_to_m = reliable_to_m
         self.f_range = f_range  # (min, max) focal length of the calibration points
         # camera distance at the farthest calibration point (smallest m), for reporting
         self.far_distance_m = far_distance_m
@@ -265,7 +271,12 @@ class Calibration:
                 raise ValueError(f"duplicate m value {m0!r} in calibration points")
         fs = [p["f"] for p in doc["points"]]
         far = min(doc["points"], key=lambda p: p["m"])["camera_distance_m"]
-        return cls(doc["lens_model"], pts, (min(fs), max(fs)), far)
+        reliable = doc.get("reliable_to_m")
+        if reliable is not None and (isinstance(reliable, bool)
+                                     or not isinstance(reliable, (int, float))
+                                     or not reliable > 0):
+            raise ValueError(f"reliable_to_m must be a number > 0, got {reliable!r}")
+        return cls(doc["lens_model"], pts, (min(fs), max(fs)), far, reliable)
 
     @property
     def m_min(self):
@@ -362,6 +373,12 @@ def cmd_retrofit(args):
         d_est = thin_lens_m(info.maker_f, info.maker_m)
         cal = cals.get(info.lens_model or "")
         d = cal.correct(info.maker_m, d_est) if cal else d_est
+        if cal and cal.reliable_to_m is not None and (
+                info.maker_m < cal.m_min or d >= cal.reliable_to_m):
+            counts["far-unknown"] = counts.get("far-unknown", 0) + 1
+            rows.append((p.name, f"not written: far focus, distance unknown "
+                                 f"({cal.lens_model} beyond {cal.reliable_to_m:.1f} m)"))
+            continue
         label = f"calibrated ({cal.lens_model})" if cal else "UNCALIBRATED (raw formula)"
         sidetxt = " +.phos" if phos else ""
         if not args.apply:
@@ -862,6 +879,8 @@ def _print_overlap(rows):
             shp = "outside range"
         elif r["shipped_status"] == "no-cal":
             shp = "no calibration"
+        elif r["shipped_status"] == "far-unknown":
+            shp = "far focus, left unchanged"
         else:
             shp = "n/a"
         print(f"  {r['mark']:<10} {r['measured_m']:>7.3f} m  {cam:<28} {shp}")
@@ -963,7 +982,12 @@ def cmd_inspect(args):
             d_est = thin_lens_m(info.maker_f, info.maker_m)
             cal = cals.get(info.lens_model or "")
             print(f"  thin-lens estimate: {d_est:.2f} m")
-            if cal and info.maker_m < cal.m_min:
+            fstatus, fdetail, _ = maker_note_distance(info, cals)
+            if fstatus == "far-unknown":
+                print(f"  {fdetail}: the camera's maker note does not follow subject "
+                      f"distance out here, so no number is written")
+                print("  folder mode: this frame is left unchanged")
+            elif cal and info.maker_m < cal.m_min:
                 clamped = d_est * cal.far_ratio
                 far = (f", about {cal.far_distance_m:g} m" if cal.far_distance_m else "")
                 print(f"  estimate: {clamped:.2f} m (thin-lens distance x {cal.far_ratio:.3f}, "
@@ -1129,7 +1153,9 @@ def maker_note_distance(info, cals):
     """(status, detail, distance_m). status is 'ok', 'infinity' (distance_m is
     None; the stored value becomes the EXIF infinity) or a skip key:
     'no-focus', 'no-cal', 'focal', 'range' (closer than the calibration reaches),
-    'toofar' (thin-lens distance beyond 1 km). 'estimate' means the frame is
+    'toofar' (thin-lens distance beyond 1 km), 'far-unknown' (the lens has a
+    reliable_to_m and the frame is at or beyond it; nothing is written).
+    'estimate' means the frame is
     focused farther than the calibration reaches: distance_m is the thin-lens
     distance times the calibration ratio at the far end of the range, held
     constant. No measured distance has checked it. Inside the range the
@@ -1158,6 +1184,12 @@ def maker_note_distance(info, cals):
         return "range", (f"magnification {m:g} is closer than the calibrated range "
                          f"{cal.m_min:g}-{cal.m_max:g}"), None
     d_thin = thin_lens_m(f, m)
+    if cal.reliable_to_m is not None:
+        # Beyond the far end of the calibration, or a calibrated result at or
+        # past the cut: no number is written for this frame.
+        if m < cal.m_min or cal.correct(m, d_thin) >= cal.reliable_to_m:
+            return "far-unknown", (f"far focus, distance unknown ({cal.lens_model} "
+                                   f"beyond {cal.reliable_to_m:.1f} m)"), None
     if m < cal.m_min:
         if d_thin > 1000:
             # same guard as classify(); also keeps the uint32 numerator in range
@@ -1215,6 +1247,34 @@ SUMMARY_ROWS = [
 ]
 
 
+FAR_KEY, STALE_KEY = "far-unknown", "far-unknown-stale"
+# A stored distance below this fraction of the cut, on a far-focus frame, is a
+# stale near value the camera left behind.
+STALE_FRACTION = 0.75
+
+
+def _stored_near(info, cut):
+    """The stored SubjectDistance in metres when it is a real value well below
+    the cut; None for an absent tag, Infinity, zero or a value near the cut."""
+    if info.sd_offset is None or not info.sd_den or info.sd_num == SENTINEL_NUM:
+        return None
+    v = info.sd_num / info.sd_den
+    return v if 0 < v < STALE_FRACTION * cut else None
+
+
+def _far_summary_rows(tally, cals):
+    """(label, count) lines for far-unknown frames, one per lens that has any."""
+    rows = []
+    for key, text in ((FAR_KEY, "far focus, distance unknown"),
+                      (STALE_KEY, "far focus, distance unknown, stored distance "
+                                  "well below the cut")):
+        for (k, lens), n in sorted((kk, v) for kk, v in tally.items()
+                                   if isinstance(kk, tuple) and kk[0] == key):
+            cut = cals[lens].reliable_to_m
+            rows.append((f"{text} ({lens} beyond {cut:.1f} m)", n))
+    return rows
+
+
 def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
     """Run the whole job. Returns a Counter keyed by the SUMMARY_ROWS keys."""
     tally = collections.Counter()
@@ -1231,6 +1291,16 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
             if info.sd_problem:
                 raise ParseError(f"{rel}: {info.sd_problem}; refusing to touch it")
             status, detail, d = maker_note_distance(info, cals)
+            if status == "far-unknown":
+                stored = _stored_near(info, cals[info.lens_model].reliable_to_m)
+                if stored is not None:
+                    tally[(STALE_KEY, info.lens_model)] += 1
+                    emit(f"{rel}  left unchanged: {detail}; stored {stored:.3f} m "
+                         f"is far below it, left as is")
+                else:
+                    tally[(FAR_KEY, info.lens_model)] += 1
+                    emit(f"{rel}  left unchanged: {detail}")
+                continue
             if status not in ("ok", "estimate", "infinity"):
                 tally[status] += 1
                 emit(f"{rel}  skipped: {detail}")
@@ -1334,6 +1404,8 @@ def cmd_run(args):
     print(f"  {'files found:':<{W}}{found}")
     for key, *labels in SUMMARY_ROWS:
         print(f"  {labels[idx - 1] + ':':<{W}}{tally.get(key, 0)}")
+    for label, n in _far_summary_rows(tally, cals):
+        print(f"  {label}: {n} frames left unchanged")
     if undo_log.path:
         print(f"undo log: {undo_log.path}")
         print(f"to reverse the in-place changes: python3 hb-focus-retrofit.py undo "
