@@ -242,7 +242,9 @@ def test_merge_shipped_keeps_near_points_and_adds_far_marks(tool, tmp_path):
     assert all(d > far for d in added) and added
     assert set_aside and all(d not in added for d in set_aside)
     assert len(merged["points"]) == len(shipped["points"]) + len(added)
-    assert merged["points"][:len(shipped["points"])] == shipped["points"]
+    assert all(q in merged["points"] for q in shipped["points"])
+    ms = [q["m"] for q in merged["points"]]
+    assert ms == sorted(ms)
     p = tmp_path / "m.json"
     p.write_text(json.dumps(merged))
     cal = tool.Calibration.from_json(p)

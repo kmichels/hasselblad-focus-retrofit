@@ -804,6 +804,7 @@ def merge_with_shipped(doc):
               "points": shipped["points"] + [
                   {k: q[k] for k in ("m", "f", "camera_distance_m")} for q in added],
               "provenance": dict(shipped.get("provenance", {}))}
+    merged["points"].sort(key=lambda q: q["m"])
     prov = merged["provenance"]
     prov["frames"] = len(merged["points"])
     prov["extended_with_measured"] = [q["camera_distance_m"] for q in added]
