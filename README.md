@@ -303,7 +303,7 @@ Only for the copies in `retrofitted/` (older files with no tag), and not automat
 Files that don't have the data this tool needs are skipped, with the reason printed in the report, they're never guessed at or written to. This is the same behavior whether the reason is old firmware, a different camera body, or anything else the tool doesn't recognize. You just won't get a corrected focus distance for those files.
 
 **Why was my file skipped?**
-See "Why was my file skipped?" above: no focus data, no calibration for the lens, outside the calibrated range, or a symlink.
+See "Why was my file skipped?" above: no focus data, no calibration for the lens, closer than the calibrated range, computed distance beyond 1 km, or a symlink.
 
 ## Troubleshooting
 
