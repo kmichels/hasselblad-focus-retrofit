@@ -20,8 +20,10 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shutil
 import stat
+import statistics
 import struct
 import sys
 import uuid
@@ -30,6 +32,7 @@ from typing import List, Optional
 logger = logging.getLogger("hb-focus-retrofit")
 
 VERSION = "0.2.0"
+SHIPPED_CALIBRATION_DIR = pathlib.Path(__file__).resolve().parent / "calibration"
 
 
 class ParseError(Exception):
@@ -316,7 +319,7 @@ def cmd_retrofit(args):
             return 1
         cals = {cal.lens_model: cal}
     else:
-        cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
+        cals = load_calibrations(SHIPPED_CALIBRATION_DIR)
 
     files = sorted(p for p in source.iterdir()
                    if p.is_file() and p.suffix.lower() == ".3fr"
@@ -613,6 +616,203 @@ def _loo_residuals(doc):
     return out
 
 
+# Measured-distance ladders: one subfolder per mark, named by the laser reading,
+# for example 9.987m/. The true distance comes from the folder name, so the
+# camera's SubjectDistance (Infinity past ~3 m) is only used for the overlap check.
+_MARK_RE = re.compile(r"^(\d+(?:\.\d+)?)m$", re.IGNORECASE)
+# A frame whose measured/thin-lens ratio is this far from its mark's median was
+# almost certainly focused on something else or sorted into the wrong folder.
+_MISFILED = 0.15
+# A bare lens moves its maker focal length by a few percent across its focus
+# range (XCD 135: 127-132 mm); a 1.7x converter puts it at 200+ mm.
+_F_SPREAD = 1.25
+
+
+def _real_subject_distance(info):
+    sd = info.subject_distance
+    # Any real value counts, however far: firmware 1.4.15.7 writes real values past
+    # 7 m on some autofocus frames. Only the "no distance recorded" marker is dropped.
+    if sd is None or sd <= 0 or sd >= _SD_SENTINEL_M:
+        return None
+    return sd
+
+
+def derive_measured_calibration(folder):
+    """Build a calibration from a ladder whose true distances were measured.
+
+    Returns (doc, warnings, overlap_rows). Each mark becomes one point: the
+    middle frame by magnification, with the folder's distance as the truth.
+    """
+    folder = pathlib.Path(folder)
+    marks, bad_names, loose = [], [], []
+    for p in sorted(folder.iterdir()):
+        if p.name.startswith("."):
+            continue
+        if p.is_dir():
+            mt = _MARK_RE.match(p.name)
+            if not mt or float(mt.group(1)) <= 0:
+                bad_names.append(p.name)
+            else:
+                marks.append((float(mt.group(1)), p))
+        elif p.suffix.lower() == ".3fr":
+            loose.append(p.name)
+    if bad_names:
+        raise CalibrationError(
+            f"subfolder(s) in {folder} not named as a measured distance such as "
+            f"'9.987m': {', '.join(bad_names)}. Rename or move them.")
+    if loose:
+        raise CalibrationError(
+            f"3FR file(s) directly in {folder}: {', '.join(loose)}. In measured mode "
+            "every frame goes in a subfolder named by its measured distance (for "
+            "example 9.987m/). The throwaway frame after a lens change does not "
+            "belong in the ladder.")
+    seen = {}
+    for d, sub in marks:
+        if d in seen:
+            raise CalibrationError(
+                f"{seen[d]} and {sub.name} name the same distance; merge them into one folder.")
+        seen[d] = sub.name
+
+    warnings, lenses, per_mark = [], {}, []
+    for d, sub in sorted(marks, key=lambda x: x[0]):
+        files = sorted(x for x in sub.iterdir()
+                       if x.suffix.lower() == ".3fr" and not x.name.startswith("."))
+        if not files:
+            raise CalibrationError(f"{sub.name} holds no 3FR files")
+        good, zero = [], 0
+        for x in files:
+            label = f"{sub.name}/{x.name}"
+            try:
+                info = parse_file(x)
+            except ParseError:
+                raise CalibrationError(f"{label} could not be parsed as 3FR") from None
+            if info.maker_f is None or info.maker_m is None:
+                raise CalibrationError(
+                    f"{label} lacks the maker-note focus fields the tool calibrates "
+                    "against (not from an X2D II, or firmware before 1.2.7.11?)")
+            lenses.setdefault(info.lens_model, []).append(label)
+            if info.maker_m <= 0 or info.maker_f <= 0:
+                zero += 1
+                continue
+            good.append((label, info))
+        if not good:
+            warnings.append(
+                f"{sub.name}: magnification is 0 on every frame (the lens reports "
+                "infinity focus), so the maker note cannot resolve this distance for "
+                "this lens; mark left out")
+            continue
+        if zero:
+            warnings.append(f"{sub.name}: {zero} frame(s) with magnification 0 left out")
+        per_mark.append((d, sub.name, good))
+
+    if len(lenses) > 1:
+        raise CalibrationError(
+            "frames from more than one lens: "
+            + "; ".join(f"{k}: {len(v)} frame(s), e.g. {v[0]}" for k, v in sorted(
+                lenses.items(), key=lambda kv: str(kv[0])))
+            + ". Use one folder tree per lens.")
+    if len(per_mark) < 5:
+        raise CalibrationError(
+            f"only {len(per_mark)} usable marks in {folder} (need at least 5)")
+    lens = next(iter(lenses)) or "unknown-lens"
+    fs = [(i.maker_f, label) for _, _, good in per_mark for label, i in good]
+    (f_lo, lo_label), (f_hi, hi_label) = min(fs), max(fs)
+    if f_hi / f_lo > _F_SPREAD:
+        raise CalibrationError(
+            f"maker focal length ranges from {f_lo:g} mm ({lo_label}) to {f_hi:g} mm "
+            f"({hi_label}). A spread that wide means converter frames are mixed into the "
+            "ladder; shoot the lens bare and remove those frames.")
+
+    points, rows = [], []
+    shipped_cals = load_calibrations(SHIPPED_CALIBRATION_DIR)
+    for d, name, good in per_mark:
+        good.sort(key=lambda g: g[1].maker_m)
+        ests = [thin_lens_m(i.maker_f, i.maker_m) for _, i in good]
+        ratios = [d / e for e in ests]
+        r_med = statistics.median(ratios)
+        for (label, _), r in zip(good, ratios):
+            if abs(r / r_med - 1) > _MISFILED:
+                warnings.append(
+                    f"{label}: its focus position implies {d / r:.2f} m, far from the "
+                    f"other frames at {name}. Wrong folder, or AF locked on something "
+                    "else? Remove it and rerun.")
+        if len(good) > 1 and max(ests) / min(ests) > _LATCH_SPREAD:
+            warnings.append(
+                f"{name}: focus positions spread {min(ests):.2f}-{max(ests):.2f} m "
+                f"across {len(good)} frames (more than 10%)")
+        _, mid = good[(len(good) - 1) // 2]
+        points.append({"m": mid.maker_m, "f": mid.maker_f, "camera_distance_m": d,
+                       "frames": len(good)})
+        cams = [c for c in (_real_subject_distance(i) for _, i in good) if c is not None]
+        status, _, shipped = maker_note_distance(mid, shipped_cals)
+        rows.append({"mark": name, "measured_m": d,
+                     "camera_m": statistics.median(cams) if cams else None,
+                     "camera_frames": len(cams),
+                     "shipped_m": shipped if status == "ok" else None,
+                     "shipped_status": status})
+
+    for (d0, p0), (d1, p1) in zip(
+            [(p["camera_distance_m"], p) for p in points][:-1],
+            [(p["camera_distance_m"], p) for p in points][1:]):
+        if p1["m"] >= p0["m"]:
+            raise CalibrationError(
+                f"the frames at {d0:g} m and {d1:g} m have the same or reversed "
+                f"magnification ({p0['m']:.6g} vs {p1['m']:.6g}), so the maker note "
+                f"cannot separate these distances for {lens}. Leave out the farther "
+                "mark, or check that neither folder holds misfiled frames.")
+
+    first = per_mark[0][2][0][1]
+    points.sort(key=lambda p: p["m"])
+    doc = {"lens_model": lens, "points": points,
+           "provenance": {"body": first.model, "firmware": first.software,
+                          "frames": len(points), "distance_source": "measured",
+                          "reference": "focal plane mark", "contributor": "", "date": ""}}
+    return doc, warnings, rows
+
+
+def merge_with_shipped(doc):
+    """Extend the shipped calibration for this lens with the measured far marks.
+
+    All shipped points are kept. A measured point is added only where it lies
+    beyond the shipped range (farther and a smaller magnification than every
+    shipped point); the marks inside
+    the shipped range serve as the overlap check and are not used for the fit.
+    Returns (merged_doc, added_distances, set_aside_distances).
+    """
+    shipped = None
+    for p in sorted(SHIPPED_CALIBRATION_DIR.glob("*.json")):
+        try:
+            d = json.loads(p.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if d.get("lens_model") == doc["lens_model"]:
+            shipped = d
+            break
+    if shipped is None:
+        raise CalibrationError(f"no shipped calibration for {doc['lens_model']} to merge with")
+    far = max(q["camera_distance_m"] for q in shipped["points"])
+    m_floor = min(q["m"] for q in shipped["points"])
+    # A mark just past the shipped end can still have a magnification the shipped
+    # curve already reaches (3 m against a 2.9 m end); it is overlap, not extension.
+    added = [q for q in doc["points"] if q["camera_distance_m"] > far and q["m"] < m_floor]
+    set_aside = [q["camera_distance_m"] for q in doc["points"] if q not in added]
+    if not added:
+        raise CalibrationError(
+            f"no measured mark extends the shipped range (farthest shipped point "
+            f"{far:g} m); nothing to merge")
+    merged = {"lens_model": shipped["lens_model"],
+              "points": shipped["points"] + [
+                  {k: q[k] for k in ("m", "f", "camera_distance_m")} for q in added],
+              "provenance": dict(shipped.get("provenance", {}))}
+    merged["points"].sort(key=lambda q: q["m"])
+    prov = merged["provenance"]
+    prov["frames"] = len(merged["points"])
+    prov["extended_with_measured"] = [q["camera_distance_m"] for q in added]
+    prov["extension_firmware"] = doc["provenance"].get("firmware", "")
+    prov["extension_reference"] = doc["provenance"].get("reference", "")
+    return merged, [q["camera_distance_m"] for q in added], set_aside
+
+
 def _slugify_lens(lens_model):
     """Turn an untrusted EXIF lens name into a safe bare filename stem.
 
@@ -637,22 +837,65 @@ def _slugify_lens(lens_model):
     return slug or "unknown-lens"
 
 
+def _print_overlap(rows):
+    print("\noverlap check (your measured distance vs the camera's own value and the "
+          "shipped calibration):")
+    print(f"  {'mark':<10} {'measured':>9}  {'camera (frames) vs measured':<28} shipped calibration vs measured")
+    for r in rows:
+        cam = (f"{r['camera_m']:.2f} m ({r['camera_frames']}) "
+               f"{100 * (r['camera_m'] / r['measured_m'] - 1):+.1f}%"
+               if r["camera_m"] is not None else "no value")
+        if r["shipped_m"] is not None:
+            shp = f"{r['shipped_m']:.2f} m {100 * (r['shipped_m'] / r['measured_m'] - 1):+.1f}%"
+        elif r["shipped_status"] == "range":
+            shp = "outside range"
+        elif r["shipped_status"] == "no-cal":
+            shp = "no calibration"
+        else:
+            shp = "n/a"
+        print(f"  {r['mark']:<10} {r['measured_m']:>7.3f} m  {cam:<28} {shp}")
+
+
 def cmd_calibrate(args):
+    measured = getattr(args, "measured", False)
     try:
-        doc, warnings = derive_calibration(pathlib.Path(args.source).expanduser())
+        src = pathlib.Path(args.source).expanduser()
+        if measured:
+            doc, warnings, rows = derive_measured_calibration(src)
+        else:
+            doc, warnings = derive_calibration(src)
     except (CalibrationError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     doc["provenance"]["date"] = datetime.date.today().isoformat()
     doc["provenance"]["contributor"] = args.contributor or ""
+    merge = measured and getattr(args, "merge_shipped", False)
+    if getattr(args, "merge_shipped", False) and not measured:
+        print("error: --merge-shipped needs --measured", file=sys.stderr)
+        return 1
+    merged_note = None
+    if merge:
+        try:
+            doc, added, set_aside = merge_with_shipped(doc)
+        except CalibrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        merged_note = (added, set_aside)
+    suffix = "-merged.json" if merge else ("-measured.json" if measured else ".json")
     if args.out:
         out = pathlib.Path(args.out)
     else:
-        out = pathlib.Path(_slugify_lens(doc["lens_model"]) + ".json")
-        if out.exists():
-            print(f"error: {out} already exists; pass --out to choose a "
-                  f"different path", file=sys.stderr)
-            return 1
+        out = pathlib.Path(_slugify_lens(doc["lens_model"]) + suffix)
+    if measured and out.resolve().parent == SHIPPED_CALIBRATION_DIR.resolve():
+        print(f"error: refusing to write a measured or merged ladder into {SHIPPED_CALIBRATION_DIR}. "
+              "It only covers the distances you measured, and replacing a shipped "
+              "file would drop that lens's near range. Merge the two as a "
+              "separate step; write this file elsewhere.", file=sys.stderr)
+        return 1
+    if not args.out and out.exists():
+        print(f"error: {out} already exists; pass --out to choose a "
+              f"different path", file=sys.stderr)
+        return 1
     out.write_text(json.dumps(doc, indent=2) + "\n")
     print(f"wrote {out.resolve()} ({doc['provenance']['frames']} points, lens {doc['lens_model']})")
     if not args.contributor:
@@ -668,11 +911,27 @@ def cmd_calibrate(args):
         bad = bad or res > 0.02
     if bad:
         print("some residuals above 2%: consider reshooting those rungs before submitting")
+    if measured:
+        _print_overlap(rows)
+        ds = [p["camera_distance_m"] for p in doc["points"]]
+        if merged_note:
+            added, set_aside = merged_note
+            print(f"\nmerged: shipped points kept, measured marks added beyond the shipped "
+                  f"range: {', '.join(f'{d:g}' for d in added)} m"
+                  + (f"; marks inside it used only for the overlap check: "
+                     f"{', '.join(f'{d:g}' for d in set_aside)} m" if set_aside else "")
+                  + f". Curve covers {min(ds):g} to {max(ds):g} m. Check the overlap rows "
+                  "before copying it into calibration/.")
+        else:
+            print(f"\nthis file covers {min(ds):g} to {max(ds):g} m only. Do not copy it into "
+                  "calibration/. To extend the shipped curve, rerun with --merge-shipped, "
+                  "once the overlap rows show the camera's values and your measured "
+                  "distances agree.")
     return 0
 
 
 def cmd_inspect(args):
-    cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
+    cals = load_calibrations(SHIPPED_CALIBRATION_DIR)
     failures = 0
     for name in args.files:
         p = pathlib.Path(name)
@@ -1010,7 +1269,7 @@ def cmd_run(args):
         print(f"error: not a folder: {args.folder} (if you meant a command, "
               f"the commands are retrofit, calibrate, inspect, undo)", file=sys.stderr)
         return 2
-    cals = load_calibrations(pathlib.Path(__file__).resolve().parent / "calibration")
+    cals = load_calibrations(SHIPPED_CALIBRATION_DIR)
     if not cals:
         print("warning: no lens calibrations loaded; keep the calibration folder next "
               "to this script, or every file will be skipped", file=sys.stderr)
@@ -1130,9 +1389,16 @@ def build_parser():
 
     c = sub.add_parser("calibrate", help="derive a lens calibration from new-firmware ladder shots")
     c.add_argument("--source", required=True, help="folder with ladder shots (one lens per folder)")
-    c.add_argument("--out", default=None, help="output JSON path (default: <lens>.json in current folder)")
+    c.add_argument("--out", default=None, help="output JSON path (default: <lens>.json in the current folder, "
+                   "or <lens>-measured.json with --measured)")
     c.add_argument("--contributor", default=None,
                     help="your name or handle, recorded in the calibration file so you get credit")
+    c.add_argument("--measured", action="store_true",
+                   help="ladder with laser-measured distances: one subfolder per mark named "
+                        "by the reading (e.g. 9.987m/); the folder name is the true distance")
+    c.add_argument("--merge-shipped", action="store_true",
+                   help="with --measured: keep the shipped points for this lens and add the "
+                        "measured marks beyond them; writes <lens>-merged.json")
     c.set_defaults(func=cmd_calibrate)
 
     i = sub.add_parser("inspect", help="show what the tool sees in a file (never writes)")
