@@ -222,6 +222,18 @@ def test_overlap_shows_real_far_camera_values(tool, tmp_path):
     assert by[4.0]["camera_m"] is None
 
 
+def test_overlap_marks_beyond_the_shipped_range_say_outside_range(tool, tmp_path, capsys):
+    # the shipped 55V calibration ends near 2.9 m; folder mode now ESTIMATES
+    # beyond it, but the overlap table must still say the shipped value is
+    # not a calibrated prediction there
+    _, _, rows = tool.derive_measured_calibration(make_measured(tmp_path, sd=SENTINEL))
+    far = [r for r in rows if r["measured_m"] >= 10.0]
+    assert far and all(r["shipped_m"] is None for r in far)
+    tool._print_overlap(rows)
+    out = capsys.readouterr().out
+    assert out.count("outside range") >= len(far) and "n/a" not in out
+
+
 def test_overlap_table_prints_percent_differences(tool, tmp_path, capsys):
     rows = [{"mark": "8.000m", "measured_m": 8.0, "camera_m": 8.4, "camera_frames": 3,
              "shipped_m": None, "shipped_status": "range"}]

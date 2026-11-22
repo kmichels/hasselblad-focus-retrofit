@@ -758,7 +758,9 @@ def derive_measured_calibration(folder):
                      "camera_m": statistics.median(cams) if cams else None,
                      "camera_frames": len(cams),
                      "shipped_m": shipped if status == "ok" else None,
-                     "shipped_status": status})
+                     # beyond the shipped range folder mode writes an estimate, but
+                     # as a calibration prediction the shipped curve has none there
+                     "shipped_status": "range" if status in ("estimate", "toofar") else status})
 
     for (d0, p0), (d1, p1) in zip(
             [(p["camera_distance_m"], p) for p in points][:-1],
