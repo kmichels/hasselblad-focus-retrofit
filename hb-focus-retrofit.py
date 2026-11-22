@@ -785,14 +785,16 @@ def _fsync_dir(folder):
 
 def write_subject_distance_inplace(path, info, dist_m, undo_log):
     """Overwrite the existing 8-byte SubjectDistance RATIONAL with
-    round(d*1000)/1000. Order: verify the bytes are still what the parser saw,
-    make the undo line durable, write, fsync, verify, restore on failure."""
+    round(d*1000)/1000, or with the EXIF infinity (0xFFFFFFFF/1, the bytes the
+    camera itself writes) when dist_m is None. Order: verify the bytes are
+    still what the parser saw, make the undo line durable, write, fsync,
+    verify, restore on failure."""
     name = info.path.name
     if info.sd_offset is None:
         raise ParseError(f"{name}: no SubjectDistance to overwrite")
-    num = _numerator(name, dist_m)
+    num, den = (SENTINEL_NUM, 1) if dist_m is None else (_numerator(name, dist_m), 1000)
     e = "<" if info.byte_order == "II" else ">"
-    new = struct.pack(e + "II", num, 1000)
+    new = struct.pack(e + "II", num, den)
     old, off = info.sd_raw, info.sd_offset
     with open(path, "r+b") as fh:
         size = os.fstat(fh.fileno()).st_size
@@ -805,7 +807,8 @@ def write_subject_distance_inplace(path, info, dist_m, undo_log):
             "size": size, "offset": off,
             "old_hex": old.hex(), "new_hex": new.hex(),
             "old_value": (info.sd_num / info.sd_den) if info.sd_den else None,
-            "new_value": num / 1000,
+            "new_value": None if dist_m is None else num / 1000,
+            "new_kind": "infinity" if dist_m is None else "distance",
             "lens": info.lens_model,
         })
         fh.seek(off)
@@ -823,9 +826,9 @@ def write_subject_distance_inplace(path, info, dist_m, undo_log):
                 f"size {size} -> {size_after}); old bytes "
                 + ("restored" if restored else "COULD NOT BE RESTORED, see the undo log"))
     check = parse_file(path)
-    if (check.sd_num, check.sd_den) != (num, 1000):
+    if (check.sd_num, check.sd_den) != (num, den):
         raise VerifyError(f"{name}: re-parse after write read back "
-                          f"{check.sd_num}/{check.sd_den}, expected {num}/1000; see the undo log")
+                          f"{check.sd_num}/{check.sd_den}, expected {num}/{den}; see the undo log")
 
 
 def _restore_bytes(fh, off, old):
@@ -841,18 +844,24 @@ def _restore_bytes(fh, off, old):
 
 
 def maker_note_distance(info, cals):
-    """(status, detail, distance_m). status is 'ok' or a skip key:
+    """(status, detail, distance_m). status is 'ok', 'infinity' (distance_m is
+    None; the stored value becomes the EXIF infinity) or a skip key:
     'no-focus', 'no-cal', 'focal', 'range'. Same calibration lookup and formula as the
     retrofit path, but never extrapolates: outside the calibrated magnification
     range the file is skipped, not clamped."""
     f, m = info.maker_f, info.maker_m
     if f is None or m is None:
         return "no-focus", "no maker-note focus fields", None
-    if f <= 0 or m <= 0:
+    if f <= 0 or m < 0:
         return "no-focus", f"maker-note focus fields are zero (f={f:g}, m={m:g})", None
     if info.focal_length is not None and not (0.3 * info.focal_length <= f <= 3.0 * info.focal_length):
         return "no-focus", (f"maker focal {f:g} mm implausible vs nominal "
                             f"{info.focal_length:g} mm"), None
+    if m == 0:
+        # Magnification exactly 0 with a non-zero focal value is the focus ring
+        # at its infinity stop. A lost maker note has the focal value zeroed as
+        # well (all three focus fields 0), which is caught above.
+        return "infinity", "", None
     cal = cals.get(info.lens_model or "")
     if cal is None:
         return "no-cal", f"no calibration for {info.lens_model}", None
@@ -898,6 +907,8 @@ SUMMARY_ROWS = [
     ("copied", "copied with tag added", "would copy with tag added"),
     ("exists", "output already exists", "output already exists"),
     ("no-focus", "skipped, no focus data", "skipped, no focus data"),
+    ("inf-notag", "skipped, infinity, no tag to correct",
+     "skipped, infinity, no tag to correct"),
     ("no-cal", "skipped, no calibration", "skipped, no calibration"),
     ("focal", "skipped, focal length outside calibration (converter?)",
      "skipped, focal length outside calibration (converter?)"),
@@ -923,11 +934,27 @@ def process_folder(folder, cals, dry_run, run_id, undo_log, emit=print):
             if info.sd_problem:
                 raise ParseError(f"{rel}: {info.sd_problem}; refusing to touch it")
             status, detail, d = maker_note_distance(info, cals)
-            if status != "ok":
+            if status not in ("ok", "infinity"):
                 tally[status] += 1
                 emit(f"{rel}  skipped: {detail}")
                 continue
             lens = info.lens_model
+            if status == "infinity":
+                if info.sd_offset is None:
+                    tally["inf-notag"] += 1
+                    emit(f"{rel}  skipped: focused at infinity and the file has no "
+                         f"SubjectDistance tag, so there is no value to correct")
+                elif (info.sd_num, info.sd_den) == (SENTINEL_NUM, 1):
+                    tally["unchanged"] += 1
+                    emit(f"{rel}  unchanged (Infinity, {lens})")
+                elif dry_run:
+                    tally["rewritten"] += 1
+                    emit(f"{rel}  would rewrite stored {_stored_text(info)} -> Infinity  ({lens})")
+                else:
+                    write_subject_distance_inplace(p, info, None, undo_log)
+                    tally["rewritten"] += 1
+                    emit(f"{rel}  rewritten: stored {_stored_text(info)} -> Infinity  ({lens})")
+                continue
             if info.sd_offset is not None:
                 num = _numerator(rel, d)
                 if _same_value(info, num):

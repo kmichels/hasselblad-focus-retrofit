@@ -14,7 +14,7 @@ python3 hb-focus-retrofit.py ~/Pictures/X2D-Import
 
 Replace the path with your folder. The tool goes through every `.3FR` file in it, including subfolders, and for each one it computes the distance from the maker note. Then:
 
-- **File already has a SubjectDistance tag** (firmware 1.3.16.1 and later): the tag is corrected in place, whatever it held before (feet, Infinity, a stale value, or a value that was already about right). Only those 8 bytes change.
+- **File already has a SubjectDistance tag** (firmware 1.3.16.1 and later): the tag is corrected in place, whatever it held before (feet, Infinity, a stale value, or a value that was already about right). Only those 8 bytes change. A frame with the focus ring at its infinity stop gets the standard Infinity value (see "Frames focused at infinity" below).
 - **File has no tag** (older firmware): the tag cannot be added without restructuring the file, so the tool writes a copy under `retrofitted/` inside your folder, keeping your subfolder layout. The original is never opened for writing.
 - **Distance cannot be computed**: the file is left alone and the report says why (see "Why was my file skipped?").
 
@@ -48,7 +48,7 @@ The exit code is 0 when no file had an error and 1 when any did. Skipped files a
 
 Read these before you run it on a whole archive.
 
-- **Far focus is not covered yet.** Each lens is only calibrated out to a few metres, because the reference distances so far came from the camera's own value, which it only records reliably at close range. Frames focused beyond that are skipped and keep whatever the camera wrote, including a feet value or Infinity. If you mostly shoot landscapes, expect much of your archive to be skipped. Calibration ladders with laser-measured distances out to about 20 m are planned and will extend the range.
+- **Far focus is not covered yet.** Each lens is only calibrated out to a few metres, because the reference distances so far came from the camera's own value, which it only records reliably at close range. Frames focused beyond that, but not at the infinity stop, are skipped and keep whatever the camera wrote, including a feet value or Infinity. If you mostly shoot landscapes, expect much of your archive to be skipped. Calibration ladders with laser-measured distances out to about 20 m are planned and will extend the range.
 
   | Lens | Calibrated from | to about |
   |---|---|---|
@@ -89,11 +89,18 @@ For each entry in the log, the old 8 bytes go back, but only if the file still h
 
 The copies under `retrofitted/` are not covered by the log. To undo those, delete the `retrofitted` folder.
 
+### Frames focused at infinity
+
+When the focus ring is at its infinity stop, the maker note reports a magnification of exactly 0 together with a non-zero focal value. The tool writes SubjectDistance as the EXIF standard's infinity (numerator 0xFFFFFFFF, denominator 1, the same bytes the camera writes when it knows the distance is infinite), whatever the file held before. This needs no lens calibration, so it also applies to lenses that are skipped for every other distance. Frames shot a little short of the stop have a small non-zero magnification and go through the calibration like any other frame.
+
+A frame where the focal value is zero as well is not at infinity: the camera lost its focus data, and the tool leaves that file alone ("No focus data" below).
+
 ### Why was my file skipped?
 
 The report names the reason and the summary counts each one separately.
 
-- **No focus data.** The maker note has no focus fields (firmware before 1.2.7.11), or they are zero, or the focal length is implausible against the file's nominal focal length. There is nothing to compute from.
+- **No focus data.** The maker note has no focus fields (firmware before 1.2.7.11), or all of them are zero (the camera lost them, which has been seen on firmware 1.2.7.16, 1.3.16.1 and 1.3.16.2), or the focal length is implausible against the file's nominal focal length. There is nothing to compute from, and whatever the camera stored stays in the file.
+- **Infinity, no tag to correct.** The frame is focused at infinity but has no SubjectDistance tag (firmware before 1.3.16.1). There is no wrong value to fix, so no copy is made.
 - **No calibration for the lens.** The distance depends on a per-lens calibration and this lens does not have one yet. This includes the XCD 20-35E and XCD 35-100E zooms. The tool does not guess with the raw optics formula in this mode.
 - **Outside calibrated range.** The focus position is beyond the magnifications the calibration was measured at. That covers frames focused far away (small magnification), where the camera's own value is also least reliable, and extreme close-ups. The tool never extrapolates, so it leaves these alone rather than write a number it cannot support.
 - **Focal length outside calibration (converter?).** The maker-note focal length is more than 10 percent outside the range the lens was calibrated at, which usually means a converter is attached.

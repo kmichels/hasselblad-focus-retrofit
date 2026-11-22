@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Folder mode: a frame at the infinity stop (maker-note magnification exactly 0 with a non-zero focal value) now gets SubjectDistance written as the EXIF infinity (0xFFFFFFFF/1), in place, whatever the file held. Before, such frames were skipped as "no focus data" and kept a stale value. No lens calibration is needed for this.
+- A maker note with all focus fields zero is still skipped as "no focus data", with the same message as before.
+- Infinity frames in files without a SubjectDistance tag are skipped and counted on their own line ("skipped, infinity, no tag to correct"); no copy is made.
+- The undo log records `"new_value": null` and `"new_kind": "infinity"` for these entries. Undo uses the hex bytes and is unchanged.
+
 ## 0.2.0
 
 - New one-command form: `python3 hb-focus-retrofit.py <folder>` processes every `.3FR` under the folder, including subfolders, with no options to learn. `--dry-run` reports what would happen and writes nothing.
