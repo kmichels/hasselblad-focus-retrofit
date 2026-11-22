@@ -879,6 +879,8 @@ def _print_overlap(rows):
             shp = "outside range"
         elif r["shipped_status"] == "no-cal":
             shp = "no calibration"
+        elif r["shipped_status"] == "far-unknown":
+            shp = "far focus, left unchanged"
         else:
             shp = "n/a"
         print(f"  {r['mark']:<10} {r['measured_m']:>7.3f} m  {cam:<28} {shp}")
@@ -980,9 +982,9 @@ def cmd_inspect(args):
             d_est = thin_lens_m(info.maker_f, info.maker_m)
             cal = cals.get(info.lens_model or "")
             print(f"  thin-lens estimate: {d_est:.2f} m")
-            status, detail, _ = maker_note_distance(info, cals)
-            if status == "far-unknown":
-                print(f"  {detail}: the camera's maker note does not follow subject "
+            fstatus, fdetail, _ = maker_note_distance(info, cals)
+            if fstatus == "far-unknown":
+                print(f"  {fdetail}: the camera's maker note does not follow subject "
                       f"distance out here, so no number is written")
                 print("  folder mode: this frame is left unchanged")
             elif cal and info.maker_m < cal.m_min:

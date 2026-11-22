@@ -5,7 +5,6 @@ unknown". Nothing is written for it, not an estimate and not infinity. Frames
 nearer than the cut, infinity frames and other lenses behave as before."""
 import hashlib
 import json
-import struct
 
 import pytest
 from fixtures import build_3fr
@@ -238,3 +237,9 @@ def test_retrofit_command_does_not_copy_far_frames(tool, tmp_path, capsys):
     assert "far.3FR" in out and "not written: far focus, distance unknown" in out
     assert not (src / "retrofitted" / "far.3FR").exists()
     assert (src / "retrofitted" / "near.3FR").exists()
+
+
+def test_inspect_keeps_the_classify_verdict_detail(tool, tmp_path, capsys):
+    p = build_3fr(tmp_path / "t.3FR", lens_model="XCD 25V", maker_f=F25, maker_m=0.00328)
+    assert tool.main(["inspect", str(p)]) == 0
+    assert "verdict: write" in capsys.readouterr().out
